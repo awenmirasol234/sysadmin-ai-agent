@@ -3,7 +3,7 @@
 > **Project:** SysAdmin AI Agent\
 > **Type:** Agentic AI / DevOps\
 > **Target platform:** Ubuntu Server 24.04 LTS\
-> **Demo format:** Live demonstration\
+> **Evaluation format:** Live presentation & walkthrough\
 > **Primary stack:** Python, LangGraph, Multi-Provider LLM (OpenAI,
 > Anthropic, Gemini, Ollama, OpenAI-compatible), FastAPI, Streamlit,
 > Docker SDK, psutil
@@ -81,7 +81,7 @@ with human authorization.
 -   Autonomous destructive maintenance.
 
 These can be future extensions, but they should not distract from the
-first working demonstration.
+first working release.
 
 ------------------------------------------------------------------------
 
@@ -120,10 +120,10 @@ flowchart TB
             OLLAMA[Ollama Llama 3.1 / Qwen 2.5]
         end
 
-        subgraph DEMO_TARGETS["Demo Target Containers (Profile: demo)"]
-            NGINX[nginx-demo]
-            REDIS[redis-demo]
-            PG[postgres-demo]
+        subgraph SANDBOX_TARGETS["Sandbox Target Containers (Profile: sandbox)"]
+            NGINX[nginx]
+            REDIS[redis]
+            PG[postgres]
         end
     end
 
@@ -151,7 +151,7 @@ flowchart TB
 
     APPLICATION -->|Mount /var/run/docker.sock| DOCKER_ENGINE
     APPLICATION -->|Mount /proc, /sys :ro| UBUNTU
-    DOCKER_ENGINE -.-> DEMO_TARGETS
+    DOCKER_ENGINE -.-> SANDBOX_TARGETS
 ```
 
 ### 2.2 Component Responsibilities
@@ -251,7 +251,7 @@ interchangeably through the unified factory.
 
 **Recommended development approach:** Run the application on your
 development machine or a dedicated management VM and connect it to a
-dedicated Ubuntu test VM. Keep the demonstration server separate from
+dedicated Ubuntu test VM. Keep the evaluation server separate from
 important production services.
 
 ### 3.6 Containerized Deployment & Docker Compose Architecture
@@ -265,16 +265,16 @@ The entire technology stack is containerized for seamless deployment and zero-co
   Packages Streamlit, Plotly, and pandas for UI interaction.
 - **`ollama` Service (Optional Profile `local-llm`):**
   Runs an Ollama container (`ollama/ollama:latest`) for local model execution without requiring cloud API keys.
-- **`demo` Services (Optional Profile `demo`):**
-  Predefined disposable containers (`nginx-demo`, `redis-demo`, `postgres-demo`) for live demonstration testing.
+- **`sandbox` Services (Optional Profile `sandbox`):**
+  Predefined disposable containers (`nginx`, `redis`, `postgres`) for evaluation testing.
 
 The complete system boots with a single command:
 ``` bash
 docker compose up -d
 ```
-Or with local LLM and demo containers:
+Or with local LLM and sandbox containers:
 ``` bash
-docker compose --profile local-llm --profile demo up -d
+docker compose --profile local-llm --profile sandbox up -d
 ```
 
 ------------------------------------------------------------------------
@@ -351,7 +351,7 @@ Container information should include:
 Example:
 
 ``` text
-Container: nginx-demo
+Container: nginx
 Image: nginx:latest
 Status: Exited
 Exit Code: 0
@@ -427,7 +427,7 @@ Suggested initial thresholds:
   Memory         80%        95%
   Disk           80%        95%
 
-These are configurable demonstration thresholds, not universal
+These are configurable baseline thresholds, not universal
 production standards.
 
 The agent should produce structured findings:
@@ -437,7 +437,7 @@ The agent should produce structured findings:
   "severity": "warning",
   "component": "docker",
   "title": "Container stopped",
-  "observation": "nginx-demo is not running",
+  "observation": "nginx is not running",
   "possible_cause": "The container was stopped",
   "recommendation": "Inspect logs and restart if appropriate"
 }
@@ -465,7 +465,7 @@ Each function must:
 5.  Execute the operation.
 6.  Record the result.
 
-For the first version, only allow the three prepared demo containers and
+For the first version, only allow the three prepared sandbox containers and
 one or two explicitly selected services.
 
 **Human approval workflow:**
@@ -501,7 +501,7 @@ Example:
 
 ``` text
 Requested action:
-Restart nginx-demo
+Restart nginx
 
 Execution result:
 Restart command accepted.
@@ -520,7 +520,7 @@ Do not equate a successful API response with successful recovery. Verify
 the actual state afterward.
 
 For application-level health, optionally add an HTTP health check to the
-demo Nginx container.
+sandbox Nginx container.
 
 ### Module 7 --- Activity and Incident History
 
@@ -806,14 +806,14 @@ Example response:
 The backend must verify that the action is still valid and pending
 before executing it.
 
-For the live demo, implement task polling first. Add Server-Sent Events
+For the initial release, implement task polling first. Add Server-Sent Events
 (SSE) for real-time activity updates after the main workflow works.
 
 ------------------------------------------------------------------------
 
 ## 7. Database Design
 
-SQLite is sufficient for this single-server demonstration.
+SQLite is sufficient for this single-server deployment.
 
 ### Proposed Tables
 
@@ -973,7 +973,7 @@ potentially affect an entire server.
 2.  Do not run the application as root by default.
 3.  Understand that membership in the Docker group effectively grants
     root-level privileges on a conventional Docker installation.
-4.  Use a dedicated disposable VM for the demonstration.
+4.  Use a dedicated disposable VM for evaluation.
 5.  Use an allowlist for every management operation.
 6.  Never expose unrestricted shell execution to the LLM.
 7.  Validate container names and service names.
@@ -996,7 +996,7 @@ disposable Docker workloads. Run the backend with the minimum
 permissions required, and isolate the privileged action executor behind
 a narrow, authenticated interface.
 
-For the demo, do not connect this system to a school server or a
+For initial testing, do not connect this system to a school server or a
 production machine.
 
 ------------------------------------------------------------------------
@@ -1011,8 +1011,8 @@ Each phase has a specific deliverable and completion criteria.
 -   [ ] Install Python and Git.
 -   [ ] Install Docker Engine and Docker Compose.
 -   [ ] Create root Docker build definitions (`Dockerfile.backend`, `Dockerfile.dashboard`).
--   [ ] Create master `docker-compose.yml` (with core, local-llm, and demo profiles).
--   [ ] Create three disposable test containers (`nginx-demo`, `redis-demo`, `postgres-demo`).
+-   [ ] Create master `docker-compose.yml` (with core, local-llm, and sandbox profiles).
+-   [ ] Create three disposable test containers (`nginx`, `redis`, `postgres`).
 -   [ ] Configure LLM provider credentials (`.env`).
 -   [ ] Create GitHub repository.
 -   [ ] Set up Python virtual environment.
@@ -1113,14 +1113,14 @@ are handled safely.
 -   [ ] Configure environment variables.
 -   [ ] Prepare application startup.
 -   [ ] Prepare Docker test environment.
--   [ ] Create demo scenarios.
+-   [ ] Create evaluation scenarios.
 -   [ ] Prepare presentation slides.
 -   [ ] Write README documentation.
 -   [ ] Rehearse 10--15-minute presentation.
--   [ ] Prepare fallback demo screenshots and recorded output.
+-   [ ] Prepare fallback walkthrough screenshots and recorded output.
 
 **Completion:** Working application is ready for a live classroom
-demonstration.
+presentation.
 
 ------------------------------------------------------------------------
 
@@ -1186,7 +1186,7 @@ weeks.
   Approval and actions                         2 days
   API and database                             2 days
   Dashboard                                    2 days
-  Testing and demo                              1 day
+  Testing and evaluation                        1 day
   **Total**                   **15 development days**
 
   -----------------------------------------------------------------------
@@ -1209,10 +1209,10 @@ new to LangGraph or Docker permissions.
 
 ## 13. Live Presentation Script
 
-Prepare the following demonstration sequence.
+Prepare the following presentation sequence.
 
   -----------------------------------------------------------------------
-  Time                    Activity                What to demonstrate
+  Time                    Activity                What to present
   ----------------------- ----------------------- -----------------------
   0:00--1:00              Introduction            Explain the problem and
                                                   project
@@ -1240,21 +1240,21 @@ Prepare the following demonstration sequence.
                                                   limitations
   -----------------------------------------------------------------------
 
-### 13.1 Demo Preparation
+### 13.1 Environment Preparation
 
 Prepare three disposable Docker containers:
 
--   `nginx-demo` --- web server.
--   `redis-demo` --- cache server.
--   `postgres-demo` --- database server.
+-   `nginx` --- web server.
+-   `redis` --- cache server.
+-   `postgres` --- database server.
 
-Use test data only. Before the demonstration, stop the Nginx container:
+Use test data only. Before the presentation, stop the Nginx container:
 
 ``` bash
-docker stop nginx-demo
+docker stop nginx
 ```
 
-### 13.2 Demonstration Sequence
+### 13.2 Presentation Sequence
 
 **Act 1 --- Introduce the AI (1 minute)**
 
@@ -1306,13 +1306,13 @@ The agent should:
 
 The agent asks:
 
-> I found that nginx-demo is stopped. Would you like me to restart it?
+> I found that nginx is stopped. Would you like me to restart it?
 
 Click **Approve**.
 
 The agent executes the predefined restart operation.
 
-You can also demonstrate rejecting an action to show that the agent
+You can also reject an action to show that the agent
 respects human decisions.
 
 **Act 6 --- Verify Recovery (2 minutes)**
@@ -1325,7 +1325,7 @@ Expected result:
 Investigation completed.
 
 Problem:
-nginx-demo was stopped.
+nginx was stopped.
 
 Action:
 Restart approved by user.
@@ -1415,8 +1415,8 @@ sysadmin-ai-agent/
 │
 ├── Dockerfile.backend            # Lightweight backend container image
 ├── Dockerfile.dashboard          # Streamlit UI container image
-├── docker-compose.yml            # Compose orchestration (core, local-llm, demo)
-├── docker-compose.demo.yml       # Standalone demo targets (nginx, redis, postgres)
+├── docker-compose.yml            # Compose orchestration (core, local-llm, sandbox)
+├── docker-compose.sandbox.yml    # Standalone sandbox targets (nginx, redis, postgres)
 ├── requirements.txt
 ├── .env.example
 ├── .gitignore
@@ -1437,7 +1437,7 @@ At the end, the project should include:
 -   [ ] Human approval and security controls.
 -   [ ] SQLite incident and action history.
 -   [ ] README, architecture, and setup documentation.
--   [ ] 10--15-minute presentation and demo script.
+-   [ ] 10--15-minute presentation and walkthrough script.
 
 ------------------------------------------------------------------------
 
@@ -1452,7 +1452,7 @@ Build the project in this order without skipping ahead:
 5.  Build the FastAPI backend.
 6.  Build the Streamlit dashboard.
 7.  Test the complete workflow.
-8.  Prepare the live demonstration.
+8.  Prepare the live presentation and walkthrough.
 
 **The first milestone should be a working terminal-based agent.** Once
 it can successfully inspect, diagnose, and recover a test container,
@@ -1488,7 +1488,7 @@ Running: 2
 Stopped: 1
 
 Finding:
-nginx-demo is currently stopped.
+nginx is currently stopped.
 
 Recommendation:
 Investigate the container and consider
@@ -1501,12 +1501,12 @@ measurements.*
 ### Project Success Criteria
 
 The most important thing is not how many features you build. It is
-whether you can demonstrate this complete sequence:
+whether you can verify this complete sequence:
 
 **Natural language → AI reasoning → Tool execution → Problem diagnosis →
 Human approval → Action execution → Verification.**
 
-That is the core of the Agentic AI demonstration.
+That is the core of the Agentic AI value proposition.
 
 ------------------------------------------------------------------------
 
@@ -1530,10 +1530,10 @@ That is the core of the Agentic AI demonstration.
 Focus on delivering one complete, reliable agent workflow rather than
 many unfinished features.
 
-The strongest demonstration is an AI agent that receives a
+The most compelling proof is an AI agent that receives a
 natural-language request, investigates a real Ubuntu server, detects a
 stopped Docker container, proposes a solution, waits for approval,
 restarts the container, and verifies that it is running again.
 
-This clearly demonstrates the difference between a traditional chatbot
+This clearly highlights the difference between a traditional chatbot
 and an Agentic AI system.

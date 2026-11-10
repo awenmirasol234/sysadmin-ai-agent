@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     DISK_CRITICAL_THRESHOLD: float = 95.0
 
     # Security Allowlists
-    ALLOWED_CONTAINERS: Union[List[str], str] = ["nginx-demo", "redis-demo", "postgres-demo"]
+    ALLOWED_CONTAINERS: Union[List[str], str] = ["nginx", "redis", "postgres"]
     ALLOWED_SERVICES: Union[List[str], str] = ["cron", "docker", "ssh"]
 
     # Action Approval Security

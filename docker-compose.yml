@@ -50,36 +50,36 @@ services:
     networks:
       - sysadmin-net
 
-  # Demo Sandbox Targets profile
-  nginx-demo:
+  # Sandbox Targets profile
+  nginx:
     image: nginx:alpine
-    container_name: nginx-demo
-    profiles: ["demo"]
+    container_name: nginx
+    profiles: ["sandbox"]
     restart: unless-stopped
     ports:
       - "8088:80"
     networks:
       - sysadmin-net
 
-  redis-demo:
+  redis:
     image: redis:alpine
-    container_name: redis-demo
-    profiles: ["demo"]
+    container_name: redis
+    profiles: ["sandbox"]
     restart: unless-stopped
     ports:
       - "6380:6379"
     networks:
       - sysadmin-net
 
-  postgres-demo:
+  postgres:
     image: postgres:alpine
-    container_name: postgres-demo
-    profiles: ["demo"]
+    container_name: postgres
+    profiles: ["sandbox"]
     restart: unless-stopped
     environment:
-      POSTGRES_USER: demo_user
-      POSTGRES_PASSWORD: demo_password
-      POSTGRES_DB: demo_db
+      POSTGRES_USER: app_user
+      POSTGRES_PASSWORD: app_password
+      POSTGRES_DB: app_db
     ports:
       - "5433:5432"
     networks:

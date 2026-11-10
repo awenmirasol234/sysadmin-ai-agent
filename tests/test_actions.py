@@ -19,9 +19,9 @@ def setup_database():
 
 def test_validate_target_allowed():
     # Allowed containers
-    validate_target("restart_container", "nginx-demo")
-    validate_target("start_container", "redis-demo")
-    validate_target("stop_container", "postgres-demo")
+    validate_target("restart_container", "nginx")
+    validate_target("start_container", "redis")
+    validate_target("stop_container", "postgres")
 
     # Allowed services
     validate_target("restart_service", "docker")
@@ -36,18 +36,18 @@ def test_validate_target_forbidden():
 
     # Shell injection attempt
     with pytest.raises(SecurityError):
-        validate_target("restart_container", "nginx-demo; rm -rf /")
+        validate_target("restart_container", "nginx; rm -rf /")
 
     # Unsupported action
     with pytest.raises(SecurityError) as exc_info:
-        validate_target("delete_database", "postgres-demo")
+        validate_target("delete_database", "postgres")
     assert "Unsupported action type" in str(exc_info.value)
 
 
 def test_compute_action_hash():
-    h1 = compute_action_hash("restart_container", "nginx-demo")
-    h2 = compute_action_hash("restart_container", "nginx-demo")
-    h3 = compute_action_hash("restart_container", "redis-demo")
+    h1 = compute_action_hash("restart_container", "nginx")
+    h2 = compute_action_hash("restart_container", "nginx")
+    h3 = compute_action_hash("restart_container", "redis")
 
     assert h1 == h2
     assert h1 != h3
@@ -58,7 +58,7 @@ def test_approval_lifecycle():
     # 1. Create approval request
     req = create_approval_request(
         action_type="restart_container",
-        target="nginx-demo",
+        target="nginx",
         reason="Nginx container is stopped.",
     )
     approval_id = req["approval_id"]
@@ -77,7 +77,7 @@ def test_approval_replay_protection():
     # 1. Create and approve request
     req = create_approval_request(
         action_type="restart_container",
-        target="nginx-demo",
+        target="nginx",
         reason="Nginx container is stopped.",
     )
     approval_id = req["approval_id"]

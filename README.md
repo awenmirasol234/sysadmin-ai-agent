@@ -13,7 +13,7 @@
 3. **Pluggable Multi-LLM Reasoning**: Zero-temperature reasoning engine with dynamic support for **OpenAI** (`gpt-4o`, `gpt-4o-mini`), **Anthropic** (`claude-3-5-sonnet`, `haiku`), **Google Gemini** (`gemini-2.5-flash`), **Ollama** (offline local models like `llama3.1`, `qwen2.5`), and **OpenAI-compatible** endpoints (Groq, DeepSeek, vLLM).
 4. **Human-in-the-Loop Authorization Gate**: State-changing operations (`restart`, `start`, `stop`) are strictly allowlisted and require an auditable, single-use, cryptographic token approved by a human administrator before execution.
 5. **Post-Action Verification**: Every executed remediation is automatically verified by inspecting the server's real post-execution state.
-6. **Turnkey Containerization**: Modular Docker Compose stack with profiles (`core`, `local-llm`, and `demo`).
+6. **Turnkey Containerization**: Modular Docker Compose stack with profiles (`core`, `local-llm`, and `sandbox`).
 7. **Interactive Dashboard**: Modern multi-tab Streamlit dashboard with real-time metrics, live log viewing, AI event trace, and approval management.
 
 ---
@@ -44,7 +44,7 @@ flowchart TB
     subgraph INFRA["Target Infrastructure"]
         DOCKER[Docker Daemon /var/run/docker.sock]
         HOST[Host Filesystem /proc, /sys]
-        DEMO[Demo Containers: nginx, redis, postgres]
+        TARGETS[Target Containers: nginx, redis, postgres]
     end
 
     ADMIN <--> UI
@@ -56,7 +56,7 @@ flowchart TB
     GRAPH --> SECURITY
     SECURITY --> DOCKER
     SECURITY --> HOST
-    DOCKER -.-> DEMO
+    DOCKER -.-> TARGETS
     API <--> DB
 ```
 
@@ -93,16 +93,16 @@ LLM_BASE_URL=http://localhost:11434
 ### 3. Running Options
 
 #### Option A: Turnkey Docker Compose (Recommended)
-Launch the entire stack (Backend + Dashboard + Sandbox Demo Containers):
+Launch the entire stack (Backend + Dashboard + Sandbox Target Containers):
 ```bash
-docker compose --profile demo up -d
+docker compose --profile sandbox up -d
 ```
 - Streamlit Dashboard: `http://localhost:8501`
 - FastAPI Documentation: `http://localhost:8000/docs`
 
 To include a local Ollama container:
 ```bash
-docker compose --profile local-llm --profile demo up -d
+docker compose --profile local-llm --profile sandbox up -d
 ```
 
 #### Option B: Native Python Execution
@@ -112,9 +112,9 @@ docker compose --profile local-llm --profile demo up -d
    source .venv/bin/activate  # On Windows: .\.venv\Scripts\activate
    pip install -r requirements.txt
    ```
-2. Start the demo sandbox containers:
+2. Start the target sandbox containers:
    ```bash
-   docker compose -f docker-compose.demo.yml up -d
+   docker compose -f docker-compose.sandbox.yml up -d
    ```
 3. Run the interactive terminal agent (Milestone 1):
    ```bash
@@ -140,22 +140,22 @@ pytest -v tests/
 
 ---
 
-## 🎭 The 7-Act Live Demonstration Script
+## 🎭 The 7-Act Live Presentation Script
 
 | Act | Activity | Description |
 |---|---|---|
 | **Act 1** | System Introduction | Introduce the agent as an autonomous sysadmin that acts with real tools and human approvals. |
 | **Act 2** | Health Check | Ask: *"Perform a complete health check of my server."* The agent queries CPU, memory, disk, and containers. |
-| **Act 3** | Introduce Failure | Simulate outage: `docker stop nginx-demo` |
-| **Act 4** | Autonomous Diagnosis | Ask: *"Investigate my Docker containers and find any stopped services."* The agent detects `nginx-demo` exited, inspects logs, records an incident, and formulates a remediation proposal. |
-| **Act 5** | Human Authorization | The agent requests approval: *"Proposed Action: restart_container on nginx-demo"*. The administrator clicks **Approve** (or test **Reject** to verify safe non-execution). |
+| **Act 3** | Introduce Failure | Simulate outage: `docker stop nginx` |
+| **Act 4** | Autonomous Diagnosis | Ask: *"Investigate my Docker containers and find any stopped services."* The agent detects `nginx` exited, inspects logs, records an incident, and formulates a remediation proposal. |
+| **Act 5** | Human Authorization | The agent requests approval: *"Proposed Action: restart_container on nginx"*. The administrator clicks **Approve** (or test **Reject** to verify safe non-execution). |
 | **Act 6** | Recovery & Verification | The agent executes the restart, re-queries container status, confirms it is `running`, and outputs a verified recovery report. |
 | **Act 7** | Audit Trail | Review the complete execution timeline and SQLite audit history in the dashboard. |
 
 ---
 
 ## 🔒 Security Architecture
-- **Strict Allowlist**: Only containers explicitly listed in `ALLOWED_CONTAINERS` (default: `nginx-demo`, `redis-demo`, `postgres-demo`) can be restarted, started, or stopped.
+- **Strict Allowlist**: Only containers explicitly listed in `ALLOWED_CONTAINERS` (default: `nginx`, `redis`, `postgres`) can be restarted, started, or stopped.
 - **Zero Arbitrary Execution**: No arbitrary shell command execution is exposed to the LLM.
 - **Single-Use Approval Tokens**: Approval tokens expire after 5 minutes and cannot be re-executed (replay protection).
 - **Log Sanitization**: Passwords, API keys, and authorization headers are automatically redacted from all log inspections.
