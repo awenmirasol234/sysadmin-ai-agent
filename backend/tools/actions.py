@@ -18,23 +18,34 @@ class SecurityError(Exception):
 
 
 def validate_target(action_type: str, target: str):
-    """Validates that the target is explicitly permitted in the allowlist."""
+    """Validates that the target is explicitly permitted in the allowlist and not protected."""
     clean_target = target.strip().lstrip("/")
-    allowed_containers = settings.ALLOWED_CONTAINERS
-    if isinstance(allowed_containers, str):
-        allowed_containers = [c.strip() for c in allowed_containers.split(",")]
 
-    allowed_services = settings.ALLOWED_SERVICES
-    if isinstance(allowed_services, str):
-        allowed_services = [s.strip() for s in allowed_services.split(",")]
+    # Disallow command injection characters in target names
+    if any(char in clean_target for char in [";", "&", "|", "`", "$", "\n", "\r", " "]):
+        raise SecurityError(f"Target name '{clean_target}' contains illegal characters.")
 
     if "container" in action_type:
-        if clean_target not in allowed_containers:
+        # Prevent self-destruction or targeting core SysAdmin infrastructure
+        if clean_target in settings.SYSTEM_PROTECTED_CONTAINERS:
+            raise SecurityError(
+                f"Target container '{clean_target}' is a protected SysAdmin system component and cannot be modified."
+            )
+
+        allowed_containers = settings.ALLOWED_CONTAINERS
+        if isinstance(allowed_containers, str):
+            allowed_containers = [c.strip() for c in allowed_containers.split(",")]
+
+        if "*" not in allowed_containers and "all" not in allowed_containers and clean_target not in allowed_containers:
             raise SecurityError(
                 f"Target container '{clean_target}' is NOT in the allowed containers allowlist: {allowed_containers}"
             )
     elif "service" in action_type:
-        if clean_target not in allowed_services:
+        allowed_services = settings.ALLOWED_SERVICES
+        if isinstance(allowed_services, str):
+            allowed_services = [s.strip() for s in allowed_services.split(",")]
+
+        if "*" not in allowed_services and clean_target not in allowed_services:
             raise SecurityError(
                 f"Target service '{clean_target}' is NOT in the allowed services allowlist: {allowed_services}"
             )

@@ -119,12 +119,6 @@ flowchart TB
         subgraph LOCAL_LLM["Optional Local LLM Container (:11434)"]
             OLLAMA[Ollama Llama 3.1 / Qwen 2.5]
         end
-
-        subgraph SANDBOX_TARGETS["Sandbox Target Containers (Profile: sandbox)"]
-            NGINX[nginx]
-            REDIS[redis]
-            PG[postgres]
-        end
     end
 
     subgraph CLOUD_MODELS[Cloud LLM Providers]
@@ -134,6 +128,7 @@ flowchart TB
     subgraph HOST_INFRA[Host Server Infrastructure]
         UBUNTU[Host Server Filesystem /proc, /sys]
         DOCKER_ENGINE[Host Docker Daemon /var/run/docker.sock]
+        WORKLOADS[Monitored Workload Containers]
         SERVICES[System Services]
     end
 
@@ -151,7 +146,7 @@ flowchart TB
 
     APPLICATION -->|Mount /var/run/docker.sock| DOCKER_ENGINE
     APPLICATION -->|Mount /proc, /sys :ro| UBUNTU
-    DOCKER_ENGINE -.-> SANDBOX_TARGETS
+    DOCKER_ENGINE -.-> WORKLOADS
 ```
 
 ### 2.2 Component Responsibilities
@@ -265,16 +260,14 @@ The entire technology stack is containerized for seamless deployment and zero-co
   Packages Streamlit, Plotly, and pandas for UI interaction.
 - **`ollama` Service (Optional Profile `local-llm`):**
   Runs an Ollama container (`ollama/ollama:latest`) for local model execution without requiring cloud API keys.
-- **`sandbox` Services (Optional Profile `sandbox`):**
-  Predefined disposable containers (`nginx`, `redis`, `postgres`) for evaluation testing.
 
 The complete system boots with a single command:
 ``` bash
 docker compose up -d
 ```
-Or with local LLM and sandbox containers:
+Or with local Ollama LLM:
 ``` bash
-docker compose --profile local-llm --profile sandbox up -d
+docker compose --profile local-llm up -d
 ```
 
 ------------------------------------------------------------------------
@@ -465,8 +458,8 @@ Each function must:
 5.  Execute the operation.
 6.  Record the result.
 
-For the first version, only allow the three prepared sandbox containers and
-one or two explicitly selected services.
+Enforce strict allowlists and permanently protect critical SysAdmin
+agent containers (`sysadmin-backend`, `sysadmin-dashboard`, `sysadmin-ollama`).
 
 **Human approval workflow:**
 
@@ -519,8 +512,8 @@ Successfully restarted.
 Do not equate a successful API response with successful recovery. Verify
 the actual state afterward.
 
-For application-level health, optionally add an HTTP health check to the
-sandbox Nginx container.
+For application-level health, optionally add an HTTP health check to
+monitored web containers.
 
 ### Module 7 --- Activity and Incident History
 
@@ -1011,8 +1004,7 @@ Each phase has a specific deliverable and completion criteria.
 -   [ ] Install Python and Git.
 -   [ ] Install Docker Engine and Docker Compose.
 -   [ ] Create root Docker build definitions (`Dockerfile.backend`, `Dockerfile.dashboard`).
--   [ ] Create master `docker-compose.yml` (with core, local-llm, and sandbox profiles).
--   [ ] Create three disposable test containers (`nginx`, `redis`, `postgres`).
+-   [ ] Create master `docker-compose.yml` (with core and local-llm profiles).
 -   [ ] Configure LLM provider credentials (`.env`).
 -   [ ] Create GitHub repository.
 -   [ ] Set up Python virtual environment.
@@ -1415,8 +1407,7 @@ sysadmin-ai-agent/
 │
 ├── Dockerfile.backend            # Lightweight backend container image
 ├── Dockerfile.dashboard          # Streamlit UI container image
-├── docker-compose.yml            # Compose orchestration (core, local-llm, sandbox)
-├── docker-compose.sandbox.yml    # Standalone sandbox targets (nginx, redis, postgres)
+├── docker-compose.yml            # Compose orchestration (core, local-llm)
 ├── requirements.txt
 ├── .env.example
 ├── .gitignore

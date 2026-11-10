@@ -33,9 +33,16 @@ class Settings(BaseSettings):
     DISK_WARNING_THRESHOLD: float = 80.0
     DISK_CRITICAL_THRESHOLD: float = 95.0
 
-    # Security Allowlists
-    ALLOWED_CONTAINERS: Union[List[str], str] = ["nginx", "redis", "postgres"]
+    # Security Allowlists (* = permit all non-system containers, or provide explicit list)
+    ALLOWED_CONTAINERS: Union[List[str], str] = ["*"]
     ALLOWED_SERVICES: Union[List[str], str] = ["cron", "docker", "ssh"]
+
+    # Critical Agent System Containers (Protected from self-modification)
+    SYSTEM_PROTECTED_CONTAINERS: List[str] = [
+        "sysadmin-backend",
+        "sysadmin-dashboard",
+        "sysadmin-ollama",
+    ]
 
     # Action Approval Security
     APPROVAL_EXPIRATION_SECONDS: int = 300

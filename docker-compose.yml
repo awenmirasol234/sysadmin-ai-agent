@@ -50,41 +50,6 @@ services:
     networks:
       - sysadmin-net
 
-  # Sandbox Targets profile
-  nginx:
-    image: nginx:alpine
-    container_name: nginx
-    profiles: ["sandbox"]
-    restart: unless-stopped
-    ports:
-      - "8088:80"
-    networks:
-      - sysadmin-net
-
-  redis:
-    image: redis:alpine
-    container_name: redis
-    profiles: ["sandbox"]
-    restart: unless-stopped
-    ports:
-      - "6380:6379"
-    networks:
-      - sysadmin-net
-
-  postgres:
-    image: postgres:alpine
-    container_name: postgres
-    profiles: ["sandbox"]
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: app_user
-      POSTGRES_PASSWORD: app_password
-      POSTGRES_DB: app_db
-    ports:
-      - "5433:5432"
-    networks:
-      - sysadmin-net
-
 volumes:
   sysadmin_data:
   ollama_models:

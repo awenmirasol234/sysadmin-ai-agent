@@ -1,57 +1,92 @@
 """Live end-to-end recovery evaluation test simulating failure, authorization, and recovery."""
 
+import pytest
+from docker.errors import DockerException
+
+from backend.config import settings
 from backend.agent.graph import execute_approved_remediation, run_investigation
 from backend.db import get_pending_approvals, init_db
 from backend.tools.actions import decide_approval
-from backend.tools.docker_tools import get_container_status
+from backend.tools.docker_tools import get_container_status, get_docker_client
 
 
 def test_live_troubleshooting_flow():
     init_db()
 
-    # Ensure nginx is in stopped state for testing investigation and recovery
-    from backend.tools.docker_tools import get_docker_client
     try:
         client = get_docker_client()
-        c = client.containers.get("nginx")
-        if c.status == "running":
-            c.stop(timeout=5)
-    except Exception:
-        pass
+    except DockerException:
+        pytest.skip("Docker daemon unavailable; skipping live recovery test.")
 
-    # Verify nginx is currently stopped
-    status_before = get_container_status("nginx")
-    assert status_before in ("exited", "stopped", "not_found")
+    probe_name = "sysadmin-test-probe"
+    test_container = None
 
-    # AI Investigation
-    task_id = "test-live-recovery-01"
-    result = run_investigation(task_id, "Inspect Docker containers and find stopped services")
+    try:
+        # Cleanup any previous probe if it exists
+        try:
+            old = client.containers.get(probe_name)
+            old.remove(force=True)
+        except Exception:
+            pass
 
-    assert result["pending_approval_id"] is not None
-    assert result["approval_status"] == "pending"
+        # Create transient test workload container
+        test_container = client.containers.run(
+            "nginx:alpine",
+            name=probe_name,
+            detach=True,
+        )
 
-    report = result["final_report"]
-    assert "nginx" in report
-    assert "Pending Human Approval" in report
+        # Stop the probe container to simulate an unexpected outage
+        test_container.stop(timeout=5)
 
-    # Human Approval Gate
-    pending = get_pending_approvals()
-    target_appr = next((p for p in pending if p["target"] == "nginx"), None)
-    assert target_appr is not None
-    appr_id = target_appr["id"]
+        # Verify probe is currently stopped
+        status_before = get_container_status(probe_name)
+        assert status_before in ("exited", "stopped", "not_found")
 
-    # Approve action
-    decision_res = decide_approval(appr_id, "approve")
-    assert decision_res["status"] == "approved"
+        # Allow arbitrary non-system containers
+        settings.ALLOWED_CONTAINERS = ["*"]
 
-    # Remediation & Verification
-    recovery_res = execute_approved_remediation(task_id, appr_id)
-    assert len(recovery_res["execution_results"]) > 0
-    assert recovery_res["execution_results"][0]["success"] is True
+        # AI Investigation
+        task_id = "test-live-recovery-01"
+        result = run_investigation(task_id, f"Inspect Docker containers and find stopped services")
 
-    # Post-action verification: container is now running!
-    status_after = get_container_status("nginx")
-    assert status_after == "running"
+        assert result["pending_approval_id"] is not None
+        assert result["approval_status"] == "pending"
 
-    recovery_report = recovery_res["final_report"]
-    assert "Verification successful: Container 'nginx' is now running." in recovery_report
+        report = result["final_report"]
+        assert probe_name in report
+        assert "Pending Human Approval" in report
+
+        # Human Approval Gate
+        pending = get_pending_approvals()
+        target_appr = next((p for p in pending if p["target"] == probe_name), None)
+        assert target_appr is not None
+        appr_id = target_appr["id"]
+
+        # Approve action
+        decision_res = decide_approval(appr_id, "approve")
+        assert decision_res["status"] == "approved"
+
+        # Remediation & Verification
+        recovery_res = execute_approved_remediation(task_id, appr_id)
+        assert len(recovery_res["execution_results"]) > 0
+        assert recovery_res["execution_results"][0]["success"] is True
+
+        # Post-action verification: container is now running!
+        status_after = get_container_status(probe_name)
+        assert status_after == "running"
+
+        recovery_report = recovery_res["final_report"]
+        assert f"Verification successful: Container '{probe_name}' is now running." in recovery_report
+
+    finally:
+        # Clean teardown of transient test workload
+        if test_container:
+            try:
+                test_container.remove(force=True)
+            except Exception:
+                pass
+        try:
+            client.containers.get(probe_name).remove(force=True)
+        except Exception:
+            pass

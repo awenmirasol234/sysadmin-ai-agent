@@ -1,6 +1,7 @@
 """Unit tests for action security, allowlist validation, and approval token lifecycle."""
 
 import pytest
+from backend.config import settings
 from backend.db import init_db
 from backend.tools.actions import (
     SecurityError,
@@ -15,13 +16,23 @@ from backend.tools.actions import (
 @pytest.fixture(autouse=True)
 def setup_database():
     init_db()
+    orig_allowed = settings.ALLOWED_CONTAINERS
+    settings.ALLOWED_CONTAINERS = ["*"]
+    yield
+    settings.ALLOWED_CONTAINERS = orig_allowed
 
 
 def test_validate_target_allowed():
-    # Allowed containers
-    validate_target("restart_container", "nginx")
-    validate_target("start_container", "redis")
-    validate_target("stop_container", "postgres")
+    # Wildcard allowlist permits valid arbitrary containers
+    settings.ALLOWED_CONTAINERS = ["*"]
+    validate_target("restart_container", "production-api")
+    validate_target("start_container", "redis-cache")
+    validate_target("stop_container", "worker-service")
+
+    # Explicit allowlist
+    settings.ALLOWED_CONTAINERS = ["app-frontend", "app-backend"]
+    validate_target("restart_container", "app-frontend")
+    validate_target("start_container", "app-backend")
 
     # Allowed services
     validate_target("restart_service", "docker")
@@ -29,18 +40,29 @@ def test_validate_target_allowed():
 
 
 def test_validate_target_forbidden():
-    # Unauthorized container
+    # 1. Protected SysAdmin containers are ALWAYS blocked even in wildcard mode
+    settings.ALLOWED_CONTAINERS = ["*"]
+    with pytest.raises(SecurityError) as exc_info:
+        validate_target("restart_container", "sysadmin-backend")
+    assert "protected SysAdmin system component" in str(exc_info.value)
+
+    with pytest.raises(SecurityError) as exc_info:
+        validate_target("stop_container", "sysadmin-dashboard")
+    assert "protected SysAdmin system component" in str(exc_info.value)
+
+    # 2. Unauthorized container with explicit allowlist
+    settings.ALLOWED_CONTAINERS = ["app-frontend"]
     with pytest.raises(SecurityError) as exc_info:
         validate_target("restart_container", "unauthorized-prod-db")
     assert "NOT in the allowed containers allowlist" in str(exc_info.value)
 
-    # Shell injection attempt
+    # 3. Shell injection / illegal character attempt
     with pytest.raises(SecurityError):
-        validate_target("restart_container", "nginx; rm -rf /")
+        validate_target("restart_container", "app-frontend; rm -rf /")
 
-    # Unsupported action
+    # 4. Unsupported action
     with pytest.raises(SecurityError) as exc_info:
-        validate_target("delete_database", "postgres")
+        validate_target("delete_database", "app-frontend")
     assert "Unsupported action type" in str(exc_info.value)
 
 
