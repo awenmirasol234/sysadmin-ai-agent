@@ -89,80 +89,85 @@ first working demonstration.
 
 ### 2.1 High-Level Architecture
 
-The system consists of four main layers:
+The system consists of four main layers, containerized into modular Docker images orchestrated via Docker Compose:
 
-1.  **Presentation layer:** Streamlit dashboard.
-2.  **Application layer:** FastAPI backend.
-3.  **Agent layer:** LangGraph orchestration and pluggable multi-provider LLM reasoning.
-4.  **Infrastructure layer:** Ubuntu system and Docker management tools.
+1.  **Presentation layer:** Streamlit dashboard container (`sysadmin-dashboard`).
+2.  **Application & Agent layer:** FastAPI backend container (`sysadmin-backend`) packaging LangGraph, Multi-LLM Factory, and SQLite storage.
+3.  **Local LLM layer (Optional):** Ollama container (`sysadmin-ollama`) for 100% offline, private model execution.
+4.  **Infrastructure & Target layer:** Host Ubuntu server (monitored via mounted `/proc` and `/sys`), host Docker engine (connected via `/var/run/docker.sock`), and target workload containers.
 
 ``` mermaid
 flowchart TB
-    USER[Administrator]
+    USER[Administrator Browser]
 
-    subgraph PRESENTATION[Presentation Layer]
-        UI[Streamlit Dashboard]
+    subgraph COMPOSE[Docker Compose Stack]
+        subgraph PRESENTATION["Presentation Container (:8501)"]
+            UI[Streamlit Dashboard]
+            SETTINGS_UI[Provider & Plugin UI]
+        end
+
+        subgraph APPLICATION["Backend Agent Container (:8000)"]
+            API[FastAPI REST API]
+            DB[(SQLite Database)]
+            LG[LangGraph Workflow]
+            FACTORY[LLM Provider Factory]
+            STATE[Agent State]
+            APPROVAL[Human Approval Gate]
+            PLUGINS[Plugin Loader /app/plugins]
+        end
+
+        subgraph LOCAL_LLM["Optional Local LLM Container (:11434)"]
+            OLLAMA[Ollama Llama 3.1 / Qwen 2.5]
+        end
+
+        subgraph DEMO_TARGETS["Demo Target Containers (Profile: demo)"]
+            NGINX[nginx-demo]
+            REDIS[redis-demo]
+            PG[postgres-demo]
+        end
     end
 
-    subgraph APPLICATION[Application Layer]
-        API[FastAPI REST API]
-        DB[(SQLite Database)]
+    subgraph CLOUD_MODELS[Cloud LLM Providers]
+        CLOUD[OpenAI / Anthropic / Gemini / Groq]
     end
 
-    subgraph AGENT[Agent Layer]
-        LG[LangGraph Workflow]
-        FACTORY[LLM Provider Factory]
-        LLM["Multi-Provider LLM<br/>(OpenAI / Anthropic / Gemini / Ollama / Compatible)"]
-        STATE[Agent State]
-        APPROVAL[Human Approval Gate]
-    end
-
-    subgraph TOOLS[System Tools Layer]
-        SYS[System Monitoring Tools]
-        DOCKER[Docker Management Tools]
-        LOGS[Log Analysis Tools]
-        SERVICE[Service Management Tools]
-    end
-
-    subgraph INFRA[Infrastructure]
-        UBUNTU[Ubuntu Server]
-        CONTAINERS[Docker Containers]
+    subgraph HOST_INFRA[Host Server Infrastructure]
+        UBUNTU[Host Server Filesystem /proc, /sys]
+        DOCKER_ENGINE[Host Docker Daemon /var/run/docker.sock]
         SERVICES[System Services]
     end
 
-    USER --> UI
-    UI <--> API
+    USER <-->|HTTP :8501| UI
+    UI <-->|Internal Network| API
     API <--> DB
     API --> LG
     LG <--> FACTORY
-    FACTORY <--> LLM
+    FACTORY -.->|Local Network| OLLAMA
+    FACTORY -.->|HTTPS API| CLOUD
     LG <--> STATE
-    LG --> SYS
-    LG --> DOCKER
-    LG --> LOGS
-    LG --> SERVICE
     LG --> APPROVAL
     APPROVAL --> API
-    SYS --> UBUNTU
-    DOCKER --> CONTAINERS
-    LOGS --> UBUNTU
-    LOGS --> CONTAINERS
-    SERVICE --> SERVICES
+    LG --> PLUGINS
+
+    APPLICATION -->|Mount /var/run/docker.sock| DOCKER_ENGINE
+    APPLICATION -->|Mount /proc, /sys :ro| UBUNTU
+    DOCKER_ENGINE -.-> DEMO_TARGETS
 ```
 
 ### 2.2 Component Responsibilities
 
-  Component          Responsibility
-  ------------------ --------------------------------------------
-  Streamlit          Dashboard, chat, approval & settings interface
-  FastAPI            API endpoints and application coordination
-  LangGraph          Agent workflow, state, and control flow
-  LLM Factory        Provider-agnostic LLM reasoning & tool calls
-  System tools       Collect server metrics
-  Docker SDK         Inspect and manage containers
-  Log analyzer       Retrieve and interpret logs
-  Approval manager   Validate human authorization
-  SQLite             Store incidents, actions, and history
+  Component            Responsibility
+  -------------------- -------------------------------------------------------------------
+  Streamlit            Dashboard, chat, approval, model provider & plugin interface
+  FastAPI              API endpoints, background task queue, and application coordination
+  LangGraph            Agent workflow, state machine, and investigation control flow
+  LLM Factory          Provider-agnostic LLM reasoning & tool calls (Cloud & Local)
+  Plugin Engine        Dynamic hot-mounting of custom system management tools
+  System tools         Collect host metrics via mounted procfs (`/host/proc`)
+  Docker SDK           Inspect, monitor, and manage containers via host Docker socket
+  Log analyzer         Retrieve and interpret container & system logs
+  Approval manager     Validate human authorization tokens and prevent replay attacks
+  SQLite               Store incidents, tasks, executions, and audit history
 
 ### 2.3 Agent Execution Cycle
 
@@ -248,6 +253,29 @@ interchangeably through the unified factory.
 development machine or a dedicated management VM and connect it to a
 dedicated Ubuntu test VM. Keep the demonstration server separate from
 important production services.
+
+### 3.6 Containerized Deployment & Docker Compose Architecture
+
+The entire technology stack is containerized for seamless deployment and zero-configuration environment setup:
+
+- **`sysadmin-backend` Image (`Dockerfile.backend`):**
+  Packages Python 3.12, FastAPI, LangGraph, and the multi-provider LLM factory.
+  Mounts `/var/run/docker.sock` to manage containers, and `/proc:/host/proc:ro` to inspect host metrics.
+- **`sysadmin-dashboard` Image (`Dockerfile.dashboard`):**
+  Packages Streamlit, Plotly, and pandas for UI interaction.
+- **`ollama` Service (Optional Profile `local-llm`):**
+  Runs an Ollama container (`ollama/ollama:latest`) for local model execution without requiring cloud API keys.
+- **`demo` Services (Optional Profile `demo`):**
+  Predefined disposable containers (`nginx-demo`, `redis-demo`, `postgres-demo`) for live demonstration testing.
+
+The complete system boots with a single command:
+``` bash
+docker compose up -d
+```
+Or with local LLM and demo containers:
+``` bash
+docker compose --profile local-llm --profile demo up -d
+```
 
 ------------------------------------------------------------------------
 
@@ -672,7 +700,7 @@ When reporting a problem, include:
 
 To prevent provider lock-in and enable deployment on any cloud or
 air-gapped local server, the agent relies on a unified LLM Factory
-(`backend/agent/llm_factory.py`).
+(`backend/agent/llm.py`).
 
 ``` python
 def get_chat_model(
@@ -695,6 +723,30 @@ The factory:
    using LangChain's uniform `.bind_tools()` interface.
 4. Validates model tool-calling capabilities during startup or provider
    switching.
+
+### 5.7 Plugin & Technology Integration Architecture
+
+To allow seamless addition of new technologies (databases, caches, web
+servers, custom monitoring sidecars) without modifying core agent code,
+the system implements a container-centric **Plugin Architecture**:
+
+1. **Dockerized Target Technologies:**
+   Any technology running as a Docker container (e.g. MySQL, MongoDB,
+   RabbitMQ, Kafka, Kubernetes kind node) automatically becomes
+   discoverable and manageable through the agent's Docker SDK tools by
+   adding its container name to `ALLOWED_CONTAINERS`.
+
+2. **Hot-Mountable Tool Plugins (`backend/plugins/`):**
+   Custom Python inspection tools can be dropped into the
+   `backend/plugins/` directory (mounted into the container at
+   `/app/plugins`). On startup, the backend automatically imports any
+   tool decorated with `@sysadmin_plugin` and registers it in the
+   LangGraph agent's tool catalog.
+
+3. **Decoupled Architecture:**
+   Core agent reasoning remains decoupled from specific technology
+   implementations, allowing sysadmins to plug in enterprise-specific
+   monitoring probes with zero code changes to the agent workflow.
 
 ------------------------------------------------------------------------
 
@@ -933,6 +985,11 @@ potentially affect an entire server.
 11. Never send private keys, passwords, or unnecessary sensitive logs to
     the LLM.
 12. Record every privileged operation.
+13. Mount host filesystems (`/proc`, `/sys`) strictly with read-only
+    (`:ro`) flags to prevent containerized processes from modifying host
+    kernel state.
+14. Isolate internal backend communications via Docker bridge network
+    (`sysadmin-net`), exposing only required ports.
 
 **Recommended setup:** Use a dedicated Ubuntu test VM with only
 disposable Docker workloads. Run the backend with the minimum
@@ -948,104 +1005,91 @@ production machine.
 
 Each phase has a specific deliverable and completion criteria.
 
-### Phase 0 --- Environment Preparation
+### Phase 0 --- Environment Preparation & Containerization
 
 -   [ ] Create Ubuntu 24.04 test VM (or development environment with Docker).
 -   [ ] Install Python and Git.
--   [ ] Install Docker Engine.
+-   [ ] Install Docker Engine and Docker Compose.
+-   [ ] Create root Docker build definitions (`Dockerfile.backend`, `Dockerfile.dashboard`).
+-   [ ] Create master `docker-compose.yml` (with core, local-llm, and demo profiles).
 -   [ ] Create three disposable test containers (`nginx-demo`, `redis-demo`, `postgres-demo`).
 -   [ ] Configure LLM provider credentials (`.env`).
 -   [ ] Create GitHub repository.
 -   [ ] Set up Python virtual environment.
 
-**Completion:** Development environment is ready.
+**Completion:** Development environment and container definitions are ready.
 
 ### Phase 1 --- System Monitoring
 
--   [ ] Implement CPU monitoring.
--   [ ] Implement memory monitoring.
--   [ ] Implement disk monitoring.
--   [ ] Implement uptime and system information.
--   [ ] Implement Docker container listing.
--   [ ] Implement container details and statistics.
--   [ ] Implement log retrieval.
--   [ ] Add unit tests.
+-   [ ] Implement host-aware CPU & memory monitoring (`backend/tools/system.py`).
+-   [ ] Implement disk usage & uptime monitoring.
+-   [ ] Implement Docker container listing (`backend/tools/docker_tools.py`).
+-   [ ] Implement container details, statistics, and log retrieval.
+-   [ ] Add unit tests (`tests/test_system.py`, `tests/test_docker.py`).
 
-**Completion:** Python can retrieve actual Ubuntu and Docker information
-without AI.
+**Completion:** Python can retrieve actual Ubuntu and Docker information without AI.
 
 ### Phase 2 --- AI Agent Development & Multi-LLM Factory
 
--   [ ] Implement multi-provider LLM Factory (`backend/agent/llm_factory.py`).
+-   [ ] Implement multi-provider LLM Factory (`backend/agent/llm.py`).
 -   [ ] Support OpenAI, Anthropic, Gemini, Ollama, and OpenAI-compatible endpoints.
--   [ ] Define agent state.
--   [ ] Create system prompt.
+-   [ ] Define agent state (`backend/agent/state.py`).
+-   [ ] Create system prompt (`backend/agent/prompts.py`).
 -   [ ] Register read-only tools with `.bind_tools()`.
--   [ ] Create LangGraph nodes.
--   [ ] Configure conditional routing.
--   [ ] Implement tool calling & provider probe tests.
--   [ ] Implement investigation limits.
--   [ ] Test using natural-language requests.
+-   [ ] Create LangGraph nodes (`backend/agent/nodes.py`).
+-   [ ] Configure conditional routing & compiled graph (`backend/agent/graph.py`).
+-   [ ] Implement tool calling & provider probe tests (`tests/test_llm.py`).
+-   [ ] Implement terminal agent CLI runner (`backend/cli.py`).
 
 **Completion:** AI can independently choose tools and investigate server
 conditions across any configured LLM provider.
 
 ### Phase 3 --- Diagnosis and Reporting
 
--   [ ] Implement monitoring thresholds.
--   [ ] Detect stopped containers.
--   [ ] Detect high resource usage.
--   [ ] Identify relevant log errors.
--   [ ] Generate structured incidents.
--   [ ] Add severity classification.
--   [ ] Generate investigation reports.
+-   [ ] Implement static threshold helpers in `backend/tools/system.py`.
+-   [ ] Detect stopped containers and increasing restart counts.
+-   [ ] Identify relevant log error excerpts.
+-   [ ] Generate structured incidents via LLM `analyze_results` node.
+-   [ ] Add severity classification and concise evidence reporting.
 
-**Completion:** AI can identify problems using actual evidence and
-explain its findings.
+**Completion:** AI can identify problems using actual evidence and explain its findings.
 
 ### Phase 4 --- Human Approval and Actions
 
--   [ ] Implement action allowlist.
--   [ ] Create approval records.
--   [ ] Implement approval expiration.
--   [ ] Implement approve/reject operations.
--   [ ] Implement action validation.
--   [ ] Implement container restart.
--   [ ] Implement container start/stop.
--   [ ] Record action execution.
--   [ ] Verify operation results.
+-   [ ] Implement cohesive action & security module (`backend/tools/actions.py`).
+-   [ ] Implement target allowlist verification.
+-   [ ] Implement approval record creation and token hashing.
+-   [ ] Implement approval expiration & single-use replay prevention.
+-   [ ] Implement container restart, start, and stop.
+-   [ ] Verify operation results post-execution.
+-   [ ] Add action & security tests (`tests/test_actions.py`).
 
-**Completion:** AI can execute authorized operations and verify their
-results.
+**Completion:** AI can execute authorized operations and verify their results safely.
 
-### Phase 5 --- FastAPI Backend
+### Phase 5 --- FastAPI Backend & SQLite
 
--   [ ] Create API structure.
--   [ ] Implement monitoring endpoints.
--   [ ] Implement Docker endpoints.
--   [ ] Implement agent task endpoint.
--   [ ] Implement task status endpoint.
--   [ ] Implement approval endpoints.
--   [ ] Implement activity history.
--   [ ] Integrate SQLite.
--   [ ] Add API error handling.
+-   [ ] Consolidate database schema & audit queries in `backend/db.py`.
+-   [ ] Implement FastAPI endpoints (`backend/main.py`).
+-   [ ] Implement system metrics and Docker routes.
+-   [ ] Implement agent task background worker and polling endpoints.
+-   [ ] Implement approval endpoints (`/api/approvals/{id}/approve`, `/reject`).
+-   [ ] Implement activity & audit history endpoints.
+-   [ ] Add API error handling and input validation.
 
 **Completion:** All backend modules communicate through REST APIs.
 
 ### Phase 6 --- Streamlit Dashboard
 
--   [ ] Create overview page.
--   [ ] Create system metric cards.
--   [ ] Create Docker container table.
--   [ ] Create AI assistant interface.
--   [ ] Create live activity timeline.
--   [ ] Create approval center.
--   [ ] Create incident history.
--   [ ] Create model provider & settings interface.
--   [ ] Connect dashboard to FastAPI.
+-   [ ] Implement API client wrapper (`dashboard/api_client.py`).
+-   [ ] Implement multi-tab dashboard (`dashboard/app.py`).
+-   [ ] Tab 1: Overview (system health cards, gauges, recent incidents).
+-   [ ] Tab 2: Containers (container inventory, resource stats, logs).
+-   [ ] Tab 3: AI Assistant (chat interface & live investigation trace).
+-   [ ] Tab 4: Approvals (pending action cards with Approve/Reject).
+-   [ ] Tab 5: Activity History (searchable audit trail).
+-   [ ] Tab 6: Settings & Model Management (active provider & connection test).
 
-**Completion:** User can monitor, investigate, and approve actions
-through the dashboard.
+**Completion:** User can monitor, investigate, approve actions, and configure models through the dashboard.
 
 ### Phase 7 --- Testing and Refinement
 
@@ -1338,56 +1382,45 @@ explain.
 sysadmin-ai-agent/
 │
 ├── backend/
-│   ├── main.py
-│   ├── config.py
-│   ├── cli.py
+│   ├── main.py                   # FastAPI REST API & route definitions
+│   ├── config.py                 # Settings (env vars, thresholds, allowlist)
+│   ├── db.py                     # SQLite engine, models & audit persistence
+│   ├── cli.py                    # Milestone 1 terminal-based agent runner
 │   │
-│   ├── agent/
-│   │   ├── llm_factory.py
-│   │   ├── graph.py
-│   │   ├── state.py
-│   │   ├── prompts.py
-│   │   └── nodes.py
+│   ├── agent/                    # Core Agentic Reasoning
+│   │   ├── llm.py                # Multi-provider LLM factory (OpenAI, Claude, Gemini, Ollama)
+│   │   ├── state.py              # TypedDict AgentState definition
+│   │   ├── prompts.py            # System prompts & diagnosis guidance
+│   │   ├── nodes.py              # LangGraph workflow nodes
+│   │   └── graph.py              # Compiled StateGraph with checkpointer
 │   │
-│   ├── tools/
-│   │   ├── system_tools.py
-│   │   ├── docker_tools.py
-│   │   ├── log_tools.py
-│   │   └── action_tools.py
+│   ├── tools/                    # Cohesive System Tools
+│   │   ├── system.py             # Host-aware psutil metrics & threshold checks
+│   │   ├── docker_tools.py       # Docker SDK container inspect, stats, logs
+│   │   └── actions.py            # Allowlist security, approval tokens & action executions
 │   │
-│   ├── security/
-│   │   ├── permissions.py
-│   │   └── approvals.py
-│   │
-│   ├── services/
-│   │   ├── monitoring.py
-│   │   └── diagnosis.py
-│   │
-│   └── database/
-│       ├── connection.py
-│       ├── models.py
-│       └── history.py
+│   └── plugins/                  # Dynamic custom tool plugins (hot-mountable)
+│       └── __init__.py
 │
 ├── dashboard/
-│   ├── app.py
-│   └── components/
-│       ├── metrics.py
-│       ├── containers.py
-│       ├── activity.py
-│       ├── approvals.py
-│       └── settings.py
+│   ├── app.py                    # Streamlit app (Overview, Containers, Chat, Approvals, History, Settings)
+│   └── api_client.py             # Clean HTTP client wrapper for backend API
 │
 ├── tests/
-│   ├── test_llm_factory.py
-│   ├── test_system_tools.py
-│   ├── test_docker_tools.py
-│   └── test_permissions.py
+│   ├── test_llm.py               # Multi-provider instantiation tests
+│   ├── test_system.py            # psutil & host procfs tests
+│   ├── test_docker.py            # Docker inspection tests
+│   ├── test_actions.py           # Allowlist security & single-use token tests
+│   └── test_graph.py             # LangGraph routing & approval gate tests
 │
-├── docker-compose.demo.yml
+├── Dockerfile.backend            # Lightweight backend container image
+├── Dockerfile.dashboard          # Streamlit UI container image
+├── docker-compose.yml            # Compose orchestration (core, local-llm, demo)
+├── docker-compose.demo.yml       # Standalone demo targets (nginx, redis, postgres)
 ├── requirements.txt
 ├── .env.example
 ├── .gitignore
-├── Dockerfile
+├── sysadmin-ai-agent-implementation-plan.md
 └── README.md
 ```
 
