@@ -56,9 +56,9 @@ def plan_investigation(state: AgentState) -> Dict[str, Any]:
     task_id = state.get("task_id", "default-task")
 
     plan = []
-    if any(k in user_request for k in ["container", "docker", "service", "nginx", "redis", "postgres"]):
+    if any(k in user_request for k in ["container", "docker", "service", "workload", "daemon"]):
         plan.extend(["list_docker_containers", "inspect_targets"])
-    if any(k in user_request for k in ["health", "server", "cpu", "memory", "ram", "disk", "uptime", "all"]):
+    if any(k in user_request for k in ["health", "server", "cpu", "memory", "ram", "disk", "uptime", "all", "system"]):
         plan.extend(["get_system_metrics", "get_disk_usage", "get_uptime", "list_docker_containers"])
 
     if not plan:
@@ -304,11 +304,7 @@ def generate_report(state: AgentState) -> Dict[str, Any]:
     observations = state.get("observations", [])
 
     # Extract high-level summary metrics
-    sys_metrics = None
-    for obs in observations:
-        if obs.get("type") == "system_metrics":
-            sys_metrics = obs
-            break
+    sys_metrics = next((obs for obs in observations if obs.get("type") == "system_metrics"), None)
 
     # Build structured markdown report
     lines = [

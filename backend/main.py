@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-
 from backend.agent.graph import execute_approved_remediation, run_investigation
 from backend.agent.llm import get_chat_model, probe_model_connection
 from backend.config import settings
@@ -154,14 +153,7 @@ def get_agent_task(id: str) -> Dict[str, Any]:
         task = db.query(AgentTask).filter(AgentTask.id == id).first()
         if not task:
             raise HTTPException(status_code=404, detail=f"Task '{id}' not found.")
-        return {
-            "id": task.id,
-            "user_request": task.user_request,
-            "status": task.status,
-            "started_at": task.started_at.isoformat() if task.started_at else None,
-            "completed_at": task.completed_at.isoformat() if task.completed_at else None,
-            "final_report": task.final_report,
-        }
+        return task.to_dict(include_events=False)
 
 
 @app.get("/api/agent/tasks/{id}/events")
@@ -170,15 +162,7 @@ def get_agent_task_events(id: str) -> List[Dict[str, Any]]:
         task = db.query(AgentTask).filter(AgentTask.id == id).first()
         if not task:
             raise HTTPException(status_code=404, detail=f"Task '{id}' not found.")
-        return [
-            {
-                "id": e.id,
-                "event_type": e.event_type,
-                "description": e.description,
-                "created_at": e.created_at.isoformat() if e.created_at else None,
-            }
-            for e in task.events
-        ]
+        return [e.to_dict() for e in task.events]
 
 
 @app.get("/api/approvals")

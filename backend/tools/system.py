@@ -137,32 +137,20 @@ def evaluate_thresholds(
     issues = []
     severity = "healthy"
 
-    # CPU checks
-    if cpu_percent >= settings.CPU_CRITICAL_THRESHOLD:
-        severity = "critical"
-        issues.append(f"CPU critical: {cpu_percent}% >= {settings.CPU_CRITICAL_THRESHOLD}%")
-    elif cpu_percent >= settings.CPU_WARNING_THRESHOLD:
-        if severity != "critical":
-            severity = "warning"
-        issues.append(f"CPU warning: {cpu_percent}% >= {settings.CPU_WARNING_THRESHOLD}%")
+    checks = [
+        ("CPU", cpu_percent, settings.CPU_WARNING_THRESHOLD, settings.CPU_CRITICAL_THRESHOLD),
+        ("Memory", memory_percent, settings.MEMORY_WARNING_THRESHOLD, settings.MEMORY_CRITICAL_THRESHOLD),
+        ("Disk", disk_percent, settings.DISK_WARNING_THRESHOLD, settings.DISK_CRITICAL_THRESHOLD),
+    ]
 
-    # Memory checks
-    if memory_percent >= settings.MEMORY_CRITICAL_THRESHOLD:
-        severity = "critical"
-        issues.append(f"Memory critical: {memory_percent}% >= {settings.MEMORY_CRITICAL_THRESHOLD}%")
-    elif memory_percent >= settings.MEMORY_WARNING_THRESHOLD:
-        if severity != "critical":
-            severity = "warning"
-        issues.append(f"Memory warning: {memory_percent}% >= {settings.MEMORY_WARNING_THRESHOLD}%")
-
-    # Disk checks
-    if disk_percent >= settings.DISK_CRITICAL_THRESHOLD:
-        severity = "critical"
-        issues.append(f"Disk critical: {disk_percent}% >= {settings.DISK_CRITICAL_THRESHOLD}%")
-    elif disk_percent >= settings.DISK_WARNING_THRESHOLD:
-        if severity != "critical":
-            severity = "warning"
-        issues.append(f"Disk warning: {disk_percent}% >= {settings.DISK_WARNING_THRESHOLD}%")
+    for name, val, warn, crit in checks:
+        if val >= crit:
+            severity = "critical"
+            issues.append(f"{name} critical: {val}% >= {crit}%")
+        elif val >= warn:
+            if severity != "critical":
+                severity = "warning"
+            issues.append(f"{name} warning: {val}% >= {warn}%")
 
     return {
         "status": severity,

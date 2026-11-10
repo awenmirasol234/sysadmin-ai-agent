@@ -78,17 +78,9 @@ def build_agent_graph():
 agent_graph = build_agent_graph()
 
 
-def run_investigation(task_id: str, user_request: str) -> Dict[str, Any]:
-    """Runs a complete investigation cycle for a user task."""
-    init_db()
-    with SessionLocal() as db:
-        existing = db.query(AgentTask).filter(AgentTask.id == task_id).first()
-        if not existing:
-            db_task = AgentTask(id=task_id, user_request=user_request, status="running")
-            db.add(db_task)
-            db.commit()
-
-    initial_state: AgentState = {
+def _create_initial_state(task_id: str, user_request: str, **kwargs) -> AgentState:
+    """Helper to initialize an AgentState dictionary with standard defaults."""
+    state: AgentState = {
         "task_id": task_id,
         "user_request": user_request,
         "messages": [],
@@ -102,7 +94,21 @@ def run_investigation(task_id: str, user_request: str) -> Dict[str, Any]:
         "final_report": None,
         "iteration": 0,
     }
+    state.update(kwargs)
+    return state
 
+
+def run_investigation(task_id: str, user_request: str) -> Dict[str, Any]:
+    """Runs a complete investigation cycle for a user task."""
+    init_db()
+    with SessionLocal() as db:
+        existing = db.query(AgentTask).filter(AgentTask.id == task_id).first()
+        if not existing:
+            db_task = AgentTask(id=task_id, user_request=user_request, status="running")
+            db.add(db_task)
+            db.commit()
+
+    initial_state = _create_initial_state(task_id, user_request)
     config = {"configurable": {"thread_id": task_id}}
     result_state = agent_graph.invoke(initial_state, config=config)
     return result_state
@@ -111,20 +117,12 @@ def run_investigation(task_id: str, user_request: str) -> Dict[str, Any]:
 def execute_approved_remediation(task_id: str, approval_id: str) -> Dict[str, Any]:
     """Resumes the workflow to execute an authorized remediation and verify outcome."""
     init_db()
-    resume_state: AgentState = {
-        "task_id": task_id,
-        "user_request": "Execute approved remediation",
-        "messages": [],
-        "observations": [],
-        "findings": [],
-        "proposed_actions": [],
-        "pending_approval_id": approval_id,
-        "approval_status": "approved",
-        "execution_results": [],
-        "verification_results": [],
-        "final_report": None,
-        "iteration": 0,
-    }
+    resume_state = _create_initial_state(
+        task_id,
+        "Execute approved remediation",
+        pending_approval_id=approval_id,
+        approval_status="approved",
+    )
 
     # Execute action node directly
     exec_res = execute_action(resume_state)

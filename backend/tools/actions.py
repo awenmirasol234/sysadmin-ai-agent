@@ -53,6 +53,13 @@ def validate_target(action_type: str, target: str):
         raise SecurityError(f"Unsupported action type: '{action_type}'")
 
 
+def _is_expired(expires_at: datetime, now: datetime) -> bool:
+    """Checks whether an expiration timestamp has passed in UTC."""
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at < now
+
+
 def compute_action_hash(action_type: str, target: str) -> str:
     """Computes a SHA-256 fingerprint of the action type and target."""
     payload = f"{action_type.strip().lower()}:{target.strip().lower()}"
@@ -116,10 +123,7 @@ def decide_approval(approval_id: str, decision: str) -> Dict[str, Any]:
             return {"error": f"Approval request '{approval_id}' is already {approval.status}."}
 
         # Check expiration
-        expires_at = approval.expires_at
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-        if expires_at < now:
+        if _is_expired(approval.expires_at, now):
             approval.status = "expired"
             db.commit()
             return {"error": f"Approval request '{approval_id}' has expired."}
@@ -151,10 +155,7 @@ def execute_approved_action(approval_id: str) -> Dict[str, Any]:
             return {"error": f"Cannot execute: Approval status is '{approval.status}', expected 'approved'."}
 
         # Check expiration
-        expires_at = approval.expires_at
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-        if expires_at < now:
+        if _is_expired(approval.expires_at, now):
             approval.status = "expired"
             db.commit()
             return {"error": "Approval token has expired."}
@@ -198,21 +199,13 @@ def execute_approved_action(approval_id: str) -> Dict[str, Any]:
                 raise ValueError(f"Unsupported action: {action_type}")
 
             # Verify outcome
+            expected_status = "exited" if action_type == "stop_container" else "running"
             current_status = get_container_status(target)
-            if action_type in ("restart_container", "start_container"):
-                if current_status == "running":
-                    success = True
-                    verification_output = f"Verification successful: Container '{target}' is now running."
-                else:
-                    success = False
-                    verification_output = f"Verification failed: Expected running, but container '{target}' status is '{current_status}'."
-            elif action_type == "stop_container":
-                if current_status == "exited":
-                    success = True
-                    verification_output = f"Verification successful: Container '{target}' is now exited."
-                else:
-                    success = False
-                    verification_output = f"Verification failed: Expected exited, but container '{target}' status is '{current_status}'."
+            success = (current_status == expected_status)
+            if success:
+                verification_output = f"Verification successful: Container '{target}' is now {expected_status}."
+            else:
+                verification_output = f"Verification failed: Expected {expected_status}, but container '{target}' status is '{current_status}'."
 
         except NotFound:
             exec_output = f"Container '{target}' not found on host."

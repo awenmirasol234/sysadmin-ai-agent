@@ -34,6 +34,19 @@ class AgentTask(Base):
     incidents = relationship("Incident", back_populates="task", cascade="all, delete-orphan")
     approvals = relationship("ActionApproval", back_populates="task", cascade="all, delete-orphan")
 
+    def to_dict(self, include_events: bool = True) -> Dict[str, Any]:
+        data = {
+            "id": self.id,
+            "user_request": self.user_request,
+            "status": self.status,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "final_report": self.final_report,
+        }
+        if include_events:
+            data["events"] = [e.to_dict() for e in self.events]
+        return data
+
 
 class AgentEvent(Base):
     __tablename__ = "agent_events"
@@ -45,6 +58,14 @@ class AgentEvent(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     task = relationship("AgentTask", back_populates="events")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "event_type": self.event_type,
+            "description": self.description,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
 
 
 class Incident(Base):
@@ -60,6 +81,18 @@ class Incident(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     task = relationship("AgentTask", back_populates="incidents")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "severity": self.severity,
+            "component": self.component,
+            "title": self.title,
+            "description": self.description,
+            "status": self.status,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
 
 
 class ActionApproval(Base):
@@ -78,6 +111,18 @@ class ActionApproval(Base):
 
     task = relationship("AgentTask", back_populates="approvals")
     executions = relationship("ActionExecution", back_populates="approval", cascade="all, delete-orphan")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "action_type": self.action_type,
+            "target": self.target,
+            "reason": self.reason,
+            "status": self.status,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+        }
 
 
 class ActionExecution(Base):
@@ -171,19 +216,7 @@ def record_incident(
 def get_all_incidents(limit: int = 50) -> List[Dict[str, Any]]:
     with SessionLocal() as db:
         items = db.query(Incident).order_by(desc(Incident.created_at)).limit(limit).all()
-        return [
-            {
-                "id": i.id,
-                "task_id": i.task_id,
-                "severity": i.severity,
-                "component": i.component,
-                "title": i.title,
-                "description": i.description,
-                "status": i.status,
-                "created_at": i.created_at.isoformat() if i.created_at else None,
-            }
-            for i in items
-        ]
+        return [i.to_dict() for i in items]
 
 
 def get_pending_approvals() -> List[Dict[str, Any]]:
@@ -206,41 +239,10 @@ def get_pending_approvals() -> List[Dict[str, Any]]:
             .order_by(desc(ActionApproval.created_at))
             .all()
         )
-        return [
-            {
-                "id": a.id,
-                "task_id": a.task_id,
-                "action_type": a.action_type,
-                "target": a.target,
-                "reason": a.reason,
-                "status": a.status,
-                "created_at": a.created_at.isoformat() if a.created_at else None,
-                "expires_at": a.expires_at.isoformat() if a.expires_at else None,
-            }
-            for a in approvals
-        ]
+        return [a.to_dict() for a in approvals]
 
 
 def get_task_history(limit: int = 20) -> List[Dict[str, Any]]:
     with SessionLocal() as db:
         tasks = db.query(AgentTask).order_by(desc(AgentTask.started_at)).limit(limit).all()
-        result = []
-        for t in tasks:
-            events = [
-                {
-                    "event_type": e.event_type,
-                    "description": e.description,
-                    "created_at": e.created_at.isoformat() if e.created_at else None,
-                }
-                for e in t.events
-            ]
-            result.append({
-                "id": t.id,
-                "user_request": t.user_request,
-                "status": t.status,
-                "started_at": t.started_at.isoformat() if t.started_at else None,
-                "completed_at": t.completed_at.isoformat() if t.completed_at else None,
-                "final_report": t.final_report,
-                "events": events,
-            })
-        return result
+        return [t.to_dict() for t in tasks]

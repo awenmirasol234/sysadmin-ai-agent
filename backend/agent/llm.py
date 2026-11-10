@@ -21,7 +21,7 @@ def get_chat_model(
     resolved_key = api_key or settings.get_api_key()
     resolved_base_url = base_url or settings.LLM_BASE_URL
 
-    if resolved_provider == "openai":
+    if resolved_provider in ("openai", "openai-compatible", "groq", "deepseek", "vllm", "openrouter"):
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
             model=resolved_model,
@@ -55,15 +55,6 @@ def get_chat_model(
         return ChatOllama(
             model=resolved_model,
             base_url=url,
-            temperature=resolved_temp,
-        )
-
-    elif resolved_provider in ("openai-compatible", "groq", "deepseek", "vllm", "openrouter"):
-        from langchain_openai import ChatOpenAI
-        return ChatOpenAI(
-            model=resolved_model,
-            api_key=resolved_key or "dummy-key",
-            base_url=resolved_base_url,
             temperature=resolved_temp,
         )
 
