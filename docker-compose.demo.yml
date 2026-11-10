@@ -1,0 +1,25 @@
+services:
+  nginx-demo:
+    image: nginx:alpine
+    container_name: nginx-demo
+    restart: unless-stopped
+    ports:
+      - "8088:80"
+
+  redis-demo:
+    image: redis:alpine
+    container_name: redis-demo
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+
+  postgres-demo:
+    image: postgres:alpine
+    container_name: postgres-demo
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: demo_user
+      POSTGRES_PASSWORD: demo_password
+      POSTGRES_DB: demo_db
+    ports:
+      - "5433:5432"

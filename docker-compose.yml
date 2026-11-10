@@ -1,0 +1,94 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: sysadmin-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST_PROC=/host/proc
+      - HOST_SYS=/host/sys
+      - DATABASE_URL=sqlite:////app/data/sysadmin_ai.db
+    env_file:
+      - .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro
+      - sysadmin_data:/app/data
+      - ./backend/plugins:/app/plugins:ro
+    networks:
+      - sysadmin-net
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: sysadmin-dashboard
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    environment:
+      - BACKEND_API_URL=http://backend:8000
+    depends_on:
+      - backend
+    networks:
+      - sysadmin-net
+
+  # Optional 100% offline local LLM profile
+  ollama:
+    image: ollama/ollama:latest
+    container_name: sysadmin-ollama
+    profiles: ["local-llm"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    networks:
+      - sysadmin-net
+
+  # Demo Sandbox Targets profile
+  nginx-demo:
+    image: nginx:alpine
+    container_name: nginx-demo
+    profiles: ["demo"]
+    restart: unless-stopped
+    ports:
+      - "8088:80"
+    networks:
+      - sysadmin-net
+
+  redis-demo:
+    image: redis:alpine
+    container_name: redis-demo
+    profiles: ["demo"]
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    networks:
+      - sysadmin-net
+
+  postgres-demo:
+    image: postgres:alpine
+    container_name: postgres-demo
+    profiles: ["demo"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: demo_user
+      POSTGRES_PASSWORD: demo_password
+      POSTGRES_DB: demo_db
+    ports:
+      - "5433:5432"
+    networks:
+      - sysadmin-net
+
+volumes:
+  sysadmin_data:
+  ollama_models:
+
+networks:
+  sysadmin-net:
+    driver: bridge
