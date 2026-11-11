@@ -1,6 +1,5 @@
 """Multi-provider LLM Factory for SysAdmin AI Agent."""
 
-import os
 from typing import Any, Dict, Optional
 from langchain_core.language_models.chat_models import BaseChatModel
 
@@ -18,7 +17,7 @@ def get_chat_model(
     resolved_provider = (provider or settings.LLM_PROVIDER).strip().lower()
     resolved_model = model or settings.LLM_MODEL
     resolved_temp = temperature if temperature is not None else settings.LLM_TEMPERATURE
-    resolved_key = api_key or settings.get_api_key()
+    resolved_key = api_key or settings.get_api_key(resolved_provider)
     resolved_base_url = base_url or settings.LLM_BASE_URL
 
     if resolved_provider in ("openai", "openai-compatible", "groq", "deepseek", "vllm", "openrouter"):
@@ -42,15 +41,12 @@ def get_chat_model(
         from langchain_google_genai import ChatGoogleGenerativeAI
         return ChatGoogleGenerativeAI(
             model=resolved_model,
-            google_api_key=resolved_key or settings.GOOGLE_API_KEY or settings.GEMINI_API_KEY,
+            google_api_key=resolved_key,
             temperature=resolved_temp,
         )
 
     elif resolved_provider == "ollama":
-        try:
-            from langchain_ollama import ChatOllama
-        except ImportError:
-            from langchain_community.chat_models import ChatOllama
+        from langchain_ollama import ChatOllama
         url = resolved_base_url or "http://localhost:11434"
         return ChatOllama(
             model=resolved_model,

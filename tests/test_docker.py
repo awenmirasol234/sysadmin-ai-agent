@@ -1,5 +1,8 @@
 """Unit tests for Docker tools and log sanitization."""
 
+from unittest.mock import MagicMock
+from docker.errors import NotFound
+
 from backend.tools.docker_tools import (
     get_container_details,
     get_container_status,
@@ -22,17 +25,30 @@ def test_sanitize_log_text():
     assert "Bearer [REDACTED]" in sanitized_bearer
 
 
-def test_list_docker_containers():
+def test_list_docker_containers(monkeypatch):
+    mock_container = MagicMock()
+    mock_container.short_id = "abc1234"
+    mock_container.name = "/web-api"
+    mock_container.image.tags = ["nginx:alpine"]
+    mock_container.status = "running"
+    mock_container.attrs = {"State": {"Status": "running"}, "Created": "2026-11-10T00:00:00Z"}
+
+    mock_client = MagicMock()
+    mock_client.containers.list.return_value = [mock_container]
+    monkeypatch.setattr("backend.tools.docker_tools.get_docker_client", lambda: mock_client)
+
     containers = list_docker_containers(all=True)
-    assert isinstance(containers, list)
-    if containers:
-        first = containers[0]
-        assert "name" in first
-        assert "status" in first
-        assert "id" in first
+    assert len(containers) == 1
+    assert containers[0]["name"] == "web-api"
+    assert containers[0]["status"] == "running"
+    assert containers[0]["id"] == "abc1234"
 
 
-def test_get_nonexistent_container_status():
+def test_get_nonexistent_container_status(monkeypatch):
+    mock_client = MagicMock()
+    mock_client.containers.get.side_effect = NotFound("not found")
+    monkeypatch.setattr("backend.tools.docker_tools.get_docker_client", lambda: mock_client)
+
     status = get_container_status("definitely-nonexistent-container-xyz")
     assert status == "not_found"
 

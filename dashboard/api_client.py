@@ -62,11 +62,11 @@ class APIClient:
     def reject_action(self, approval_id: str) -> Dict[str, Any]:
         return self._post(f"/api/approvals/{approval_id}/reject")
 
-    def get_incidents(self) -> List[Dict[str, Any]]:
-        return self._get("/api/incidents", default=[])
+    def get_incidents(self, limit: int = 50) -> List[Dict[str, Any]]:
+        return self._get(f"/api/incidents?limit={limit}", default=[])
 
-    def get_history(self) -> List[Dict[str, Any]]:
-        return self._get("/api/history", default=[])
+    def get_history(self, limit: int = 20) -> List[Dict[str, Any]]:
+        return self._get(f"/api/history?limit={limit}", default=[])
 
     def probe_model(self, provider: str, model: str) -> Dict[str, Any]:
         return self._post("/api/model/probe", json={"provider": provider, "model": model}, timeout=10)

@@ -1,7 +1,7 @@
 """SQLite database engine, SQLAlchemy models, and audit persistence repository."""
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 import uuid
 from sqlalchemy import (
     Boolean,
@@ -14,7 +14,7 @@ from sqlalchemy import (
     create_engine,
     desc,
 )
-from sqlalchemy.orm import declarative_base, relationship, sessionmaker
+from sqlalchemy.orm import declarative_base, joinedload, relationship, sessionmaker
 from backend.config import settings
 
 Base = declarative_base()
@@ -153,13 +153,11 @@ def init_db():
     Base.metadata.create_all(bind=engine)
 
 
-def get_db():
-    """Yields a database session with automatic cleanup."""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+def _is_expired(expires_at: datetime, now: datetime) -> bool:
+    """Checks whether an expiration timestamp has passed in UTC."""
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at < now
 
 
 # Repository Helpers
@@ -172,12 +170,46 @@ def create_task(user_request: str) -> AgentTask:
         return task
 
 
+def ensure_task(task_id: str, user_request: str) -> AgentTask:
+    with SessionLocal() as db:
+        existing = db.query(AgentTask).filter(AgentTask.id == task_id).first()
+        if existing:
+            return existing
+        task = AgentTask(id=task_id, user_request=user_request, status="running")
+        db.add(task)
+        db.commit()
+        db.refresh(task)
+        return task
+
+
+def get_task(task_id: str, include_events: bool = False) -> Optional[Dict[str, Any]]:
+    with SessionLocal() as db:
+        query = db.query(AgentTask)
+        if include_events:
+            query = query.options(joinedload(AgentTask.events))
+        task = query.filter(AgentTask.id == task_id).first()
+        return task.to_dict(include_events=include_events) if task else None
+
+
+def get_task_events(task_id: str) -> Optional[List[Dict[str, Any]]]:
+    with SessionLocal() as db:
+        task = (
+            db.query(AgentTask)
+            .options(joinedload(AgentTask.events))
+            .filter(AgentTask.id == task_id)
+            .first()
+        )
+        if not task:
+            return None
+        return [e.to_dict() for e in task.events]
+
+
 def update_task_status(task_id: str, status: str, final_report: Optional[str] = None):
     with SessionLocal() as db:
         task = db.query(AgentTask).filter(AgentTask.id == task_id).first()
         if task:
             task.status = status
-            if final_report:
+            if final_report is not None:
                 task.final_report = final_report
             if status in ("completed", "failed"):
                 task.completed_at = datetime.now(timezone.utc)
@@ -222,27 +254,160 @@ def get_all_incidents(limit: int = 50) -> List[Dict[str, Any]]:
 def get_pending_approvals() -> List[Dict[str, Any]]:
     now = datetime.now(timezone.utc)
     with SessionLocal() as db:
-        # Mark expired
-        expired = (
-            db.query(ActionApproval)
-            .filter(ActionApproval.status == "pending", ActionApproval.expires_at < now)
-            .all()
-        )
-        for exp in expired:
-            exp.status = "expired"
-        if expired:
-            db.commit()
-
-        approvals = (
+        pending = (
             db.query(ActionApproval)
             .filter(ActionApproval.status == "pending")
             .order_by(desc(ActionApproval.created_at))
             .all()
         )
-        return [a.to_dict() for a in approvals]
+        active = []
+        dirty = False
+        for item in pending:
+            if _is_expired(item.expires_at, now):
+                item.status = "expired"
+                dirty = True
+            else:
+                active.append(item.to_dict())
+        if dirty:
+            db.commit()
+        return active
+
+
+def create_approval_record(
+    approval_id: str,
+    action_type: str,
+    target: str,
+    arguments_hash: str,
+    reason: str,
+    created_at: datetime,
+    expires_at: datetime,
+    task_id: Optional[str] = None,
+) -> None:
+    with SessionLocal() as db:
+        approval = ActionApproval(
+            id=approval_id,
+            task_id=task_id,
+            action_type=action_type,
+            target=target,
+            arguments_hash=arguments_hash,
+            reason=reason,
+            status="pending",
+            created_at=created_at,
+            expires_at=expires_at,
+        )
+        db.add(approval)
+        db.commit()
+
+
+def get_approval(approval_id: str) -> Optional[Dict[str, Any]]:
+    with SessionLocal() as db:
+        approval = db.query(ActionApproval).filter(ActionApproval.id == approval_id).first()
+        return approval.to_dict() if approval else None
+
+
+def decide_approval_record(approval_id: str, decision_clean: str, now: datetime) -> Dict[str, Any]:
+    with SessionLocal() as db:
+        approval = db.query(ActionApproval).filter(ActionApproval.id == approval_id).first()
+        if not approval:
+            return {"error": f"Approval request '{approval_id}' not found."}
+
+        if approval.status != "pending":
+            return {"error": f"Approval request '{approval_id}' is already {approval.status}."}
+
+        if _is_expired(approval.expires_at, now):
+            approval.status = "expired"
+            db.commit()
+            return {"error": f"Approval request '{approval_id}' has expired."}
+
+        approval.status = "approved" if decision_clean == "approve" else "rejected"
+        approval.decided_at = now
+        db.commit()
+
+        return {
+            "approval_id": approval_id,
+            "task_id": approval.task_id,
+            "status": approval.status,
+            "action_type": approval.action_type,
+            "target": approval.target,
+        }
+
+
+def prepare_approval_execution(
+    approval_id: str,
+    now: datetime,
+    validate_fn: Callable[[str, str], None],
+    hash_fn: Callable[[str, str], str],
+) -> Dict[str, Any]:
+    """Validates an approval record before executing an action."""
+    with SessionLocal() as db:
+        approval = db.query(ActionApproval).filter(ActionApproval.id == approval_id).first()
+        if not approval:
+            return {"error": f"Approval '{approval_id}' not found."}
+
+        if approval.status == "executed":
+            return {"error": f"Security violation: Approval token '{approval_id}' has already been executed."}
+
+        if approval.status != "approved":
+            return {"error": f"Cannot execute: Approval status is '{approval.status}', expected 'approved'."}
+
+        if _is_expired(approval.expires_at, now):
+            approval.status = "expired"
+            db.commit()
+            return {"error": "Approval token has expired."}
+
+        try:
+            validate_fn(approval.action_type, approval.target)
+        except Exception as exc:
+            approval.status = "rejected"
+            db.commit()
+            return {"error": f"Security check failed: {exc}"}
+
+        if approval.arguments_hash != hash_fn(approval.action_type, approval.target):
+            approval.status = "rejected"
+            db.commit()
+            return {"error": "Security violation: Action arguments fingerprint does not match approved token."}
+
+        return {
+            "action_type": approval.action_type,
+            "target": approval.target,
+        }
+
+
+def complete_approval_execution(
+    approval_id: str,
+    action_type: str,
+    target: str,
+    result: str,
+    success: bool,
+    verification: str,
+    executed_at: datetime,
+) -> None:
+    """Marks an approval executed and persists the execution audit record."""
+    with SessionLocal() as db:
+        approval = db.query(ActionApproval).filter(ActionApproval.id == approval_id).first()
+        if approval:
+            approval.status = "executed"
+        db.add(
+            ActionExecution(
+                approval_id=approval_id,
+                action_type=action_type,
+                target=target,
+                result=result,
+                success=success,
+                verification=verification,
+                executed_at=executed_at,
+            )
+        )
+        db.commit()
 
 
 def get_task_history(limit: int = 20) -> List[Dict[str, Any]]:
     with SessionLocal() as db:
-        tasks = db.query(AgentTask).order_by(desc(AgentTask.started_at)).limit(limit).all()
+        tasks = (
+            db.query(AgentTask)
+            .options(joinedload(AgentTask.events))
+            .order_by(desc(AgentTask.started_at))
+            .limit(limit)
+            .all()
+        )
         return [t.to_dict() for t in tasks]

@@ -9,17 +9,14 @@ services:
       - "8000:8000"
     environment:
       - HOST_PROC=/host/proc
-      - HOST_SYS=/host/sys
       - DATABASE_URL=sqlite:////app/data/sysadmin_ai.db
     env_file:
       - .env
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
       - /:/host/root:ro
       - sysadmin_data:/app/data
-      - ./backend/plugins:/app/plugins:ro
     networks:
       - sysadmin-net
 

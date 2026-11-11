@@ -4,7 +4,10 @@ import time
 import pandas as pd
 import streamlit as st
 
-from dashboard.api_client import api
+try:
+    from dashboard.api_client import api
+except ImportError:
+    from api_client import api
 
 st.set_page_config(
     page_title="SysAdmin AI Agent",
@@ -157,7 +160,7 @@ with tabs[2]:
         task = api.get_task(active_task_id)
         status = task.get("status", "running")
 
-        if status in ("running", "waiting_approval"):
+        if status == "running":
             st.info(f"Status: **{status.upper()}** (Auto-refreshing...)")
             events = api.get_task_events(active_task_id)
             if events:
@@ -168,14 +171,20 @@ with tabs[2]:
             time.sleep(2)
             st.rerun()
         else:
-            st.success("Investigation Completed!")
-            st.markdown(task.get("final_report", "No report available."))
+            if status == "waiting_approval":
+                st.warning("Investigation completed — remediation requires human authorization in the Approvals tab.")
+            elif status == "failed":
+                st.error("Investigation or remediation failed.")
+            else:
+                st.success("Investigation Completed!")
+
+            st.markdown(task.get("final_report") or "No report available.")
 
             # Show historical events in expander
             with st.expander("Investigation Steps & Event Audit"):
                 events = api.get_task_events(active_task_id)
                 for e in events:
-                    st.write(f"- `[{e.get('event_type').upper()}]` {e.get('description')}")
+                    st.write(f"- `[{e.get('event_type', '').upper()}]` {e.get('description')}")
 
 # ========================================================
 # TAB 4: APPROVALS

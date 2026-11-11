@@ -7,17 +7,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from backend.agent.graph import execute_approved_remediation, run_investigation
 from backend.agent.llm import get_chat_model, probe_model_connection
+from backend.agent.report import append_rejection_outcome
 from backend.config import settings
 from backend.db import (
     create_task,
     get_all_incidents,
+    get_approval,
     get_pending_approvals,
+    get_task,
+    get_task_events,
     get_task_history,
     init_db,
     log_event,
     update_task_status,
-    SessionLocal,
-    AgentTask,
 )
 from backend.tools.actions import decide_approval
 from backend.tools.docker_tools import (
@@ -27,6 +29,7 @@ from backend.tools.docker_tools import (
 )
 from backend.tools.system import (
     get_disk_usage,
+    get_load_average,
     get_network_info,
     get_system_info,
     get_system_metrics,
@@ -51,7 +54,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -96,11 +99,13 @@ def api_system_metrics() -> Dict[str, Any]:
     disk = get_disk_usage()
     uptime = get_uptime()
     net = get_network_info()
+    load = get_load_average()
     return {
         "metrics": metrics,
         "disk": disk,
         "uptime": uptime,
         "network": net,
+        "load_average": load,
     }
 
 
@@ -149,20 +154,18 @@ def submit_agent_task(req: ChatRequest, background_tasks: BackgroundTasks) -> Ch
 
 @app.get("/api/agent/tasks/{id}")
 def get_agent_task(id: str) -> Dict[str, Any]:
-    with SessionLocal() as db:
-        task = db.query(AgentTask).filter(AgentTask.id == id).first()
-        if not task:
-            raise HTTPException(status_code=404, detail=f"Task '{id}' not found.")
-        return task.to_dict(include_events=False)
+    task = get_task(id, include_events=False)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task '{id}' not found.")
+    return task
 
 
 @app.get("/api/agent/tasks/{id}/events")
 def get_agent_task_events(id: str) -> List[Dict[str, Any]]:
-    with SessionLocal() as db:
-        task = db.query(AgentTask).filter(AgentTask.id == id).first()
-        if not task:
-            raise HTTPException(status_code=404, detail=f"Task '{id}' not found.")
-        return [e.to_dict() for e in task.events]
+    events = get_task_events(id)
+    if events is None:
+        raise HTTPException(status_code=404, detail=f"Task '{id}' not found.")
+    return events
 
 
 @app.get("/api/approvals")
@@ -176,6 +179,7 @@ def execute_remediation_worker(task_id: str, approval_id: str):
         execute_approved_remediation(task_id, approval_id)
     except Exception as e:
         log_event(task_id, "decision", f"Remediation failed: {str(e)}")
+        update_task_status(task_id, "failed", f"Remediation error: {str(e)}")
 
 
 @app.post("/api/approvals/{id}/approve")
@@ -184,11 +188,8 @@ def approve_action(id: str, background_tasks: BackgroundTasks) -> Dict[str, Any]
     if "error" in res:
         raise HTTPException(status_code=400, detail=res["error"])
 
-    # Look up task_id to execute remediation
-    with SessionLocal() as db:
-        from backend.db import ActionApproval
-        appr = db.query(ActionApproval).filter(ActionApproval.id == id).first()
-        task_id = appr.task_id if appr else "unknown"
+    appr = get_approval(id)
+    task_id = res.get("task_id") or (appr.get("task_id") if appr else None) or "unknown"
 
     background_tasks.add_task(execute_remediation_worker, task_id, id)
     return {
@@ -203,9 +204,21 @@ def reject_action(id: str) -> Dict[str, Any]:
     res = decide_approval(id, "reject")
     if "error" in res:
         raise HTTPException(status_code=400, detail=res["error"])
+
+    task_id = res.get("task_id")
+    if task_id:
+        existing = get_task(task_id)
+        log_event(task_id, "decision", f"User rejected proposed action '{res.get('action_type')}' on '{res.get('target')}'.")
+        updated_report = append_rejection_outcome(
+            existing.get("final_report") if existing else None,
+            res.get("action_type", "action"),
+            res.get("target", "target"),
+        )
+        update_task_status(task_id, "completed", updated_report)
+
     return {
         "status": "rejected",
-        "message": f"Action rejected. Server state remains unchanged.",
+        "message": "Action rejected. Server state remains unchanged.",
         "approval_id": id,
     }
 

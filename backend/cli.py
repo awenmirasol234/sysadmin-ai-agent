@@ -1,9 +1,8 @@
 """Milestone 1: Interactive Terminal CLI for SysAdmin AI Agent."""
 
-import sys
-import uuid
 from backend.agent.graph import execute_approved_remediation, run_investigation
-from backend.db import create_task, get_pending_approvals, init_db
+from backend.agent.report import append_rejection_outcome
+from backend.db import create_task, get_pending_approvals, init_db, log_event, update_task_status
 from backend.tools.actions import decide_approval
 
 
@@ -53,12 +52,19 @@ def main():
                 decision = input("Authorise this action? (approve/reject/skip) > ").strip().lower()
 
                 if decision in ("approve", "reject"):
-                    decide_approval(pending_id, decision)
+                    dec_res = decide_approval(pending_id, decision)
                     if decision == "approve":
                         print("\nAgent > Executing approved remediation and verifying recovery...")
                         remed_result = execute_approved_remediation(task.id, pending_id)
                         print("\n" + remed_result.get("final_report", "") + "\n")
                     else:
+                        log_event(task.id, "decision", "User rejected proposed remediation.")
+                        updated_report = append_rejection_outcome(
+                            report,
+                            dec_res.get("action_type", "action"),
+                            dec_res.get("target", "target"),
+                        )
+                        update_task_status(task.id, "completed", updated_report)
                         print("\nAgent > Action was rejected. Server state remains unchanged.\n")
                 else:
                     print("\nAgent > Action skipped for now. Pending in approval center.\n")

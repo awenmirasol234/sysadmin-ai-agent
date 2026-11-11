@@ -6,11 +6,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY dashboard/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY dashboard/ /app/dashboard/
 
+ENV PYTHONPATH=/app
 EXPOSE 8501
 
 HEALTHCHECK --interval=10s --timeout=5s --retries=3 \

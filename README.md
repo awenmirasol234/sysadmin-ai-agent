@@ -10,8 +10,8 @@
 
 1. **Host-Aware Server Observability**: Monitors real-time CPU, RAM, primary disk partition, network throughput, and uptime. Host procfs redirection ensures true host metrics even when running inside Docker.
 2. **Container Management & Live Inspection**: Enumerates, monitors, and extracts sanitized stdout/stderr logs from Docker containers.
-3. **Pluggable Multi-LLM Reasoning**: Zero-temperature reasoning engine with dynamic support for **OpenAI** (`gpt-4o`, `gpt-4o-mini`), **Anthropic** (`claude-3-5-sonnet`, `haiku`), **Google Gemini** (`gemini-2.5-flash`), **Ollama** (offline local models like `llama3.1`, `qwen2.5`), and **OpenAI-compatible** endpoints (Groq, DeepSeek, vLLM).
-4. **Human-in-the-Loop Authorization Gate**: State-changing operations (`restart`, `start`, `stop`) are strictly allowlisted and require an auditable, single-use, cryptographic token approved by a human administrator before execution.
+3. **Pluggable Multi-LLM Factory & Probe**: Dynamic connection factory and `/api/model/probe` health check supporting **OpenAI** (`gpt-4o`, `gpt-4o-mini`), **Anthropic** (`claude-3-5-sonnet`, `haiku`), **Google Gemini** (`gemini-2.5-flash`), **Ollama** (offline local models like `llama3.1`, `qwen2.5`), and **OpenAI-compatible** endpoints (Groq, DeepSeek, vLLM).
+4. **Human-in-the-Loop Authorization Gate**: State-changing container operations (`restart_container`, `start_container`, `stop_container`) are strictly allowlisted and require an auditable, single-use, cryptographic token approved by a human administrator before execution.
 5. **System Self-Protection**: Core SysAdmin infrastructure containers (`sysadmin-backend`, `sysadmin-dashboard`, `sysadmin-ollama`) are permanently protected and cannot be stopped or restarted by the agent.
 6. **Post-Action Verification**: Every executed remediation is automatically verified by inspecting the server's real post-execution state.
 7. **Turnkey Containerization**: Production Docker Compose stack with optional local LLM (`core` and `local-llm` profiles).
@@ -111,11 +111,11 @@ docker compose --profile local-llm up -d
    ```bash
    python -m venv .venv
    source .venv/bin/activate  # On Windows: .\.venv\Scripts\activate
-   pip install -r requirements.txt
+   pip install -r requirements.txt -r dashboard/requirements.txt
    ```
 2. Run the interactive terminal agent (Milestone 1):
    ```bash
-   python backend/cli.py
+   python -m backend.cli
    ```
 3. Or start the full API and Dashboard:
    ```bash
@@ -130,7 +130,12 @@ docker compose --profile local-llm up -d
 
 ## 🧪 Testing
 
-Run the full automated test suite (24 hermetic tests covering tools, security allowlists, approval tokens, LangGraph routing, and live container recovery):
+Run the hermetic unit and workflow test suite (isolated temporary SQLite DB, mocked Docker):
+```bash
+pytest -v tests/ --ignore=tests/test_live_recovery.py
+```
+
+Run the full suite including live Docker container recovery (requires a running Docker daemon):
 ```bash
 pytest -v tests/
 ```
@@ -142,11 +147,11 @@ pytest -v tests/
 | Step | Phase | Description |
 |---|---|---|
 | **1. Perceive** | Host & Container Inspection | The agent queries real-time CPU, memory, disk, network, and container states via psutil and Docker SDK. |
-| **2. Reason** | Problem Diagnosis | The LLM evaluates telemetry against configured thresholds, inspects container logs, and identifies stopped or degraded workloads. |
+| **2. Analyze** | Deterministic Diagnostics | The workflow evaluates telemetry against configured thresholds and inspects stopped containers and sanitized logs. |
 | **3. Propose** | Remediation Planning | Formulates a structured action proposal and generates a single-use cryptographic authorization request. |
 | **4. Authorize** | Human Approval Gate | The administrator reviews the incident details and clicks **Approve** (or **Reject** to leave state unchanged). |
 | **5. Execute** | Allowlisted Action | The backend verifies token validity and single-use status, then executes the operation against Docker API. |
-| **6. Verify** | Post-Action Inspection | The agent immediately re-queries container status, confirming it transitioned to `running`. |
+| **6. Verify** | Post-Action Inspection | The action runner immediately re-queries container status, confirming it reached the expected target state. |
 | **7. Audit** | Audit Persistence | All telemetry, decisions, approvals, and outcomes are permanently stored in SQLite. |
 
 ---

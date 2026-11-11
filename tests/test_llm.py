@@ -2,6 +2,7 @@
 
 import pytest
 from backend.agent.llm import get_chat_model
+from backend.config import Settings
 
 
 def test_instantiate_openai():
@@ -41,3 +42,15 @@ def test_unsupported_provider():
     with pytest.raises(ValueError) as exc_info:
         get_chat_model(provider="unknown-provider-xyz")
     assert "Unsupported LLM provider" in str(exc_info.value)
+
+
+def test_provider_specific_api_key_isolation():
+    cfg = Settings(
+        _env_file=None,
+        LLM_PROVIDER="openai",
+        LLM_API_KEY="sk-primary-openai",
+        ANTHROPIC_API_KEY="sk-ant-specific",
+    )
+    assert cfg.get_api_key() == "sk-primary-openai"
+    assert cfg.get_api_key("anthropic") == "sk-ant-specific"
+    assert cfg.get_api_key("google") is None

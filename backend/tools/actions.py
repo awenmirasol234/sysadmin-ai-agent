@@ -1,4 +1,4 @@
-"""Controlled, allowlisted system and container actions with human-in-the-loop authorization."""
+"""Controlled, allowlisted container actions with human-in-the-loop authorization."""
 
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -8,8 +8,15 @@ import uuid
 from docker.errors import DockerException, NotFound
 
 from backend.config import settings
-from backend.db import ActionApproval, ActionExecution, SessionLocal
+from backend.db import (
+    complete_approval_execution,
+    create_approval_record,
+    decide_approval_record,
+    prepare_approval_execution,
+)
 from backend.tools.docker_tools import get_container_status, get_docker_client
+
+SUPPORTED_CONTAINER_ACTIONS = ("restart_container", "start_container", "stop_container")
 
 
 class SecurityError(Exception):
@@ -17,47 +24,25 @@ class SecurityError(Exception):
     pass
 
 
-def validate_target(action_type: str, target: str):
-    """Validates that the target is explicitly permitted in the allowlist and not protected."""
-    clean_target = target.strip().lstrip("/")
-
-    # Disallow command injection characters in target names
-    if any(char in clean_target for char in [";", "&", "|", "`", "$", "\n", "\r", " "]):
-        raise SecurityError(f"Target name '{clean_target}' contains illegal characters.")
-
-    if "container" in action_type:
-        # Prevent self-destruction or targeting core SysAdmin infrastructure
-        if clean_target in settings.SYSTEM_PROTECTED_CONTAINERS:
-            raise SecurityError(
-                f"Target container '{clean_target}' is a protected SysAdmin system component and cannot be modified."
-            )
-
-        allowed_containers = settings.ALLOWED_CONTAINERS
-        if isinstance(allowed_containers, str):
-            allowed_containers = [c.strip() for c in allowed_containers.split(",")]
-
-        if "*" not in allowed_containers and "all" not in allowed_containers and clean_target not in allowed_containers:
-            raise SecurityError(
-                f"Target container '{clean_target}' is NOT in the allowed containers allowlist: {allowed_containers}"
-            )
-    elif "service" in action_type:
-        allowed_services = settings.ALLOWED_SERVICES
-        if isinstance(allowed_services, str):
-            allowed_services = [s.strip() for s in allowed_services.split(",")]
-
-        if "*" not in allowed_services and clean_target not in allowed_services:
-            raise SecurityError(
-                f"Target service '{clean_target}' is NOT in the allowed services allowlist: {allowed_services}"
-            )
-    else:
+def validate_target(action_type: str, target: str) -> None:
+    """Validates that the action is supported and target is permitted by policy."""
+    if action_type not in SUPPORTED_CONTAINER_ACTIONS:
         raise SecurityError(f"Unsupported action type: '{action_type}'")
 
+    clean_target = target.strip().lstrip("/")
+    if not clean_target or any(char in clean_target for char in [";", "&", "|", "`", "$", "\n", "\r", " "]):
+        raise SecurityError(f"Target name '{clean_target}' contains illegal characters.")
 
-def _is_expired(expires_at: datetime, now: datetime) -> bool:
-    """Checks whether an expiration timestamp has passed in UTC."""
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    return expires_at < now
+    if clean_target in settings.SYSTEM_PROTECTED_CONTAINERS:
+        raise SecurityError(
+            f"Target container '{clean_target}' is a protected SysAdmin system component and cannot be modified."
+        )
+
+    allowed_containers = settings.parse_comma_separated_list(settings.ALLOWED_CONTAINERS)
+    if "*" not in allowed_containers and "all" not in allowed_containers and clean_target not in allowed_containers:
+        raise SecurityError(
+            f"Target container '{clean_target}' is NOT in the allowed containers allowlist: {allowed_containers}"
+        )
 
 
 def compute_action_hash(action_type: str, target: str) -> str:
@@ -81,20 +66,16 @@ def create_approval_request(
     expires_at = now + timedelta(seconds=settings.APPROVAL_EXPIRATION_SECONDS)
     approval_id = str(uuid.uuid4())
 
-    with SessionLocal() as db:
-        approval = ActionApproval(
-            id=approval_id,
-            task_id=task_id,
-            action_type=action_type,
-            target=clean_target,
-            arguments_hash=arg_hash,
-            reason=reason,
-            status="pending",
-            created_at=now,
-            expires_at=expires_at,
-        )
-        db.add(approval)
-        db.commit()
+    create_approval_record(
+        approval_id=approval_id,
+        task_id=task_id,
+        action_type=action_type,
+        target=clean_target,
+        arguments_hash=arg_hash,
+        reason=reason,
+        created_at=now,
+        expires_at=expires_at,
+    )
 
     return {
         "approval_id": approval_id,
@@ -113,134 +94,79 @@ def decide_approval(approval_id: str, decision: str) -> Dict[str, Any]:
     if decision_clean not in ("approve", "reject"):
         return {"error": f"Invalid decision '{decision}'. Must be 'approve' or 'reject'."}
 
-    now = datetime.now(timezone.utc)
-    with SessionLocal() as db:
-        approval = db.query(ActionApproval).filter(ActionApproval.id == approval_id).first()
-        if not approval:
-            return {"error": f"Approval request '{approval_id}' not found."}
-
-        if approval.status != "pending":
-            return {"error": f"Approval request '{approval_id}' is already {approval.status}."}
-
-        # Check expiration
-        if _is_expired(approval.expires_at, now):
-            approval.status = "expired"
-            db.commit()
-            return {"error": f"Approval request '{approval_id}' has expired."}
-
-        approval.status = "approved" if decision_clean == "approve" else "rejected"
-        approval.decided_at = now
-        db.commit()
-
-        return {
-            "approval_id": approval_id,
-            "status": approval.status,
-            "action_type": approval.action_type,
-            "target": approval.target,
-        }
+    return decide_approval_record(approval_id, decision_clean, datetime.now(timezone.utc))
 
 
 def execute_approved_action(approval_id: str) -> Dict[str, Any]:
     """Validates authorization token and executes the approved action, verifying result."""
     now = datetime.now(timezone.utc)
-    with SessionLocal() as db:
-        approval = db.query(ActionApproval).filter(ActionApproval.id == approval_id).first()
-        if not approval:
-            return {"error": f"Approval '{approval_id}' not found."}
+    prepared = prepare_approval_execution(
+        approval_id=approval_id,
+        now=now,
+        validate_fn=validate_target,
+        hash_fn=compute_action_hash,
+    )
+    if "error" in prepared:
+        return prepared
 
-        if approval.status == "executed":
-            return {"error": f"Security violation: Approval token '{approval_id}' has already been executed."}
+    action_type = prepared["action_type"]
+    target = prepared["target"]
+    success = False
+    exec_output = ""
+    verification_output = ""
 
-        if approval.status != "approved":
-            return {"error": f"Cannot execute: Approval status is '{approval.status}', expected 'approved'."}
+    try:
+        client = get_docker_client()
+        container = client.containers.get(target)
 
-        # Check expiration
-        if _is_expired(approval.expires_at, now):
-            approval.status = "expired"
-            db.commit()
-            return {"error": "Approval token has expired."}
+        if action_type == "restart_container":
+            container.restart(timeout=10)
+            exec_output = f"Container '{target}' restart signal accepted."
+        elif action_type == "start_container":
+            container.start()
+            exec_output = f"Container '{target}' start signal accepted."
+        elif action_type == "stop_container":
+            container.stop(timeout=10)
+            exec_output = f"Container '{target}' stop signal accepted."
+        else:
+            raise ValueError(f"Unsupported action: {action_type}")
 
-        # Verify target allowlist again
-        try:
-            validate_target(approval.action_type, approval.target)
-        except SecurityError as se:
-            approval.status = "rejected"
-            db.commit()
-            return {"error": f"Security check failed: {str(se)}"}
+        expected_status = "exited" if action_type == "stop_container" else "running"
+        current_status = get_container_status(target)
+        success = current_status == expected_status
+        if success:
+            verification_output = f"Verification successful: Container '{target}' is now {expected_status}."
+        else:
+            verification_output = (
+                f"Verification failed: Expected {expected_status}, "
+                f"but container '{target}' status is '{current_status}'."
+            )
 
-        # Verify hash integrity
-        expected_hash = compute_action_hash(approval.action_type, approval.target)
-        if approval.arguments_hash != expected_hash:
-            approval.status = "rejected"
-            db.commit()
-            return {"error": "Security violation: Action arguments fingerprint does not match approved token."}
+    except NotFound:
+        exec_output = f"Container '{target}' not found on host."
+        verification_output = "Verification failed: Container does not exist."
+    except DockerException as de:
+        exec_output = f"Docker error executing {action_type}: {str(de)}"
+        verification_output = "Verification failed due to Docker error."
+    except Exception as e:
+        exec_output = f"Unexpected error: {str(e)}"
+        verification_output = f"Verification failed: {str(e)}"
 
-        # Perform the operation
-        action_type = approval.action_type
-        target = approval.target
-        success = False
-        exec_output = ""
-        verification_output = ""
+    complete_approval_execution(
+        approval_id=approval_id,
+        action_type=action_type,
+        target=target,
+        result=exec_output,
+        success=success,
+        verification=verification_output,
+        executed_at=datetime.now(timezone.utc),
+    )
 
-        try:
-            client = get_docker_client()
-            container = client.containers.get(target)
-
-            if action_type == "restart_container":
-                container.restart(timeout=10)
-                exec_output = f"Container '{target}' restart signal accepted."
-            elif action_type == "start_container":
-                container.start()
-                exec_output = f"Container '{target}' start signal accepted."
-            elif action_type == "stop_container":
-                container.stop(timeout=10)
-                exec_output = f"Container '{target}' stop signal accepted."
-            else:
-                raise ValueError(f"Unsupported action: {action_type}")
-
-            # Verify outcome
-            expected_status = "exited" if action_type == "stop_container" else "running"
-            current_status = get_container_status(target)
-            success = (current_status == expected_status)
-            if success:
-                verification_output = f"Verification successful: Container '{target}' is now {expected_status}."
-            else:
-                verification_output = f"Verification failed: Expected {expected_status}, but container '{target}' status is '{current_status}'."
-
-        except NotFound:
-            exec_output = f"Container '{target}' not found on host."
-            verification_output = "Verification failed: Container does not exist."
-            success = False
-        except DockerException as de:
-            exec_output = f"Docker error executing {action_type}: {str(de)}"
-            verification_output = "Verification failed due to Docker error."
-            success = False
-        except Exception as e:
-            exec_output = f"Unexpected error: {str(e)}"
-            verification_output = f"Verification failed: {str(e)}"
-            success = False
-
-        # Invalidate token by marking as executed
-        approval.status = "executed"
-
-        # Record execution
-        execution = ActionExecution(
-            approval_id=approval_id,
-            action_type=action_type,
-            target=target,
-            result=exec_output,
-            success=success,
-            verification=verification_output,
-            executed_at=now,
-        )
-        db.add(execution)
-        db.commit()
-
-        return {
-            "success": success,
-            "approval_id": approval_id,
-            "action_type": action_type,
-            "target": target,
-            "result": exec_output,
-            "verification": verification_output,
-        }
+    return {
+        "success": success,
+        "approval_id": approval_id,
+        "action_type": action_type,
+        "target": target,
+        "result": exec_output,
+        "verification": verification_output,
+    }

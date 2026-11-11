@@ -5,21 +5,20 @@ from docker.errors import DockerException
 
 from backend.config import settings
 from backend.agent.graph import execute_approved_remediation, run_investigation
-from backend.db import get_pending_approvals, init_db
+from backend.db import get_pending_approvals
 from backend.tools.actions import decide_approval
 from backend.tools.docker_tools import get_container_status, get_docker_client
 
 
 def test_live_troubleshooting_flow():
-    init_db()
-
     try:
         client = get_docker_client()
-    except DockerException:
+    except (DockerException, RuntimeError):
         pytest.skip("Docker daemon unavailable; skipping live recovery test.")
 
     probe_name = "sysadmin-test-probe"
     test_container = None
+    orig_allowed = settings.ALLOWED_CONTAINERS
 
     try:
         # Cleanup any previous probe if it exists
@@ -80,6 +79,7 @@ def test_live_troubleshooting_flow():
         assert f"Verification successful: Container '{probe_name}' is now running." in recovery_report
 
     finally:
+        settings.ALLOWED_CONTAINERS = orig_allowed
         # Clean teardown of transient test workload
         if test_container:
             try:
