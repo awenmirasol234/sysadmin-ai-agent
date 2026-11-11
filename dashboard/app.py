@@ -44,20 +44,27 @@ with st.sidebar:
     st.caption("Operations rail")
     render_html(build_sidebar_status(health, len(pending_approvals)))
 
-    st.markdown("#### Quick actions")
-    if st.button("Run host health check", key="rail_health_check", use_container_width=True):
-        res = api.submit_chat_task("Run a complete system and container health check.")
-        if "task_id" in res:
+    def _dispatch_quick_prompt(prompt: str) -> None:
+        session_id = st.session_state.get("active_chat_session_id")
+        if not session_id:
+            created = api.create_chat_session()
+            if isinstance(created, dict) and "id" in created:
+                session_id = created["id"]
+                st.session_state["active_chat_session_id"] = session_id
+
+        res = api.send_chat_message(session_id, prompt) if session_id else api.submit_chat_task(prompt)
+        if isinstance(res, dict) and "task_id" in res:
             st.session_state["active_task_id"] = res["task_id"]
             st.rerun()
 
+    st.markdown("#### Quick actions")
+    if st.button("Run host health check", key="rail_health_check", use_container_width=True):
+        _dispatch_quick_prompt("Run a complete system and container health check.")
+
     if st.button("Inspect all containers", key="rail_inspect_containers", use_container_width=True):
-        res = api.submit_chat_task(
+        _dispatch_quick_prompt(
             "Investigate all Docker containers, check for stopped containers and inspect logs."
         )
-        if "task_id" in res:
-            st.session_state["active_task_id"] = res["task_id"]
-            st.rerun()
 
     st.divider()
     if st.button("Refresh telemetry", key="rail_refresh_telemetry", use_container_width=True):

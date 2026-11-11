@@ -542,6 +542,71 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     margin-bottom: 0.85rem;
 }}
 
+.sa-tool-list {{
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    margin: 0.35rem 0 0.55rem 0;
+}}
+
+.sa-tool-step {{
+    background-color: var(--sa-canvas);
+    border: 1px solid var(--sa-border);
+    border-radius: 4px;
+    padding: 0.5rem 0.7rem;
+}}
+
+.sa-tool-head {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+}}
+
+.sa-tool-name {{
+    font-family: var(--sa-font-mono);
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--sa-ink);
+}}
+
+.sa-tool-args {{
+    font-family: var(--sa-font-mono);
+    font-size: 0.75rem;
+    color: var(--sa-ink-muted);
+    margin-top: 0.2rem;
+    word-break: break-word;
+}}
+
+.sa-tool-preview {{
+    font-family: var(--sa-font-mono);
+    font-size: 0.77rem;
+    color: var(--sa-ink);
+    margin-top: 0.3rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+}}
+
+.sa-chat-notice {{
+    font-size: 0.82rem;
+    line-height: 1.45;
+    color: var(--sa-ink);
+    background-color: var(--sa-surface);
+    border: 1px solid var(--sa-border);
+    border-left: 3px solid {PALETTE["cobalt"]};
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    margin: 0.35rem 0 0.5rem 0;
+}}
+
+.sa-chat-notice-warning {{
+    border-left-color: {PALETTE["warning_fg"]};
+}}
+
+.sa-chat-notice-critical {{
+    border-left-color: {PALETTE["critical_fg"]};
+}}
+
 @media (max-width: 820px) {{
     [data-testid="stMainBlockContainer"] {{
         padding-left: 1rem;

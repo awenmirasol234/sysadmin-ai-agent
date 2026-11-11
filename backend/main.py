@@ -5,19 +5,26 @@ from typing import Any, Dict, List, Optional
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from backend.agent.chat_agent import run_chat_turn
 from backend.agent.graph import execute_approved_remediation, run_investigation
 from backend.agent.llm import get_chat_model, probe_model_connection
 from backend.agent.report import append_rejection_outcome
 from backend.config import settings
 from backend.db import (
+    add_chat_message,
+    create_chat_session,
     create_task,
+    delete_chat_session,
+    find_chat_session_by_task,
     get_all_incidents,
     get_approval,
+    get_chat_session,
     get_pending_approvals,
     get_task,
     get_task_events,
     get_task_history,
     init_db,
+    list_chat_sessions,
     log_event,
     update_task_status,
 )
@@ -73,6 +80,14 @@ class ChatResponse(BaseModel):
 
 class ApprovalDecisionRequest(BaseModel):
     decision: str = Field(..., description="'approve' or 'reject'")
+
+
+class CreateSessionRequest(BaseModel):
+    title: Optional[str] = Field(default="New conversation", description="Conversation thread title")
+
+
+class ChatTurnRequest(BaseModel):
+    message: str = Field(..., min_length=1, description="Natural language conversational turn")
 
 
 class ModelProbeRequest(BaseModel):
@@ -168,6 +183,80 @@ def get_agent_task_events(id: str) -> List[Dict[str, Any]]:
     return events
 
 
+def run_chat_turn_worker(session_id: str, task_id: str, message: str):
+    """Background worker executing one multi-turn agentic chat turn."""
+    try:
+        run_chat_turn(session_id, task_id, message)
+    except Exception as e:
+        log_event(task_id, "decision", f"Chat turn failed with error: {str(e)}")
+        update_task_status(task_id, "failed", f"Execution error: {str(e)}")
+        add_chat_message(
+            session_id=session_id,
+            role="assistant",
+            content=f"Execution failed with error: {str(e)}",
+            task_id=task_id,
+            mode="error",
+        )
+
+
+@app.get("/api/chat/sessions")
+def api_list_chat_sessions(limit: int = 30) -> List[Dict[str, Any]]:
+    return list_chat_sessions(limit=limit)
+
+
+@app.post("/api/chat/sessions")
+def api_create_chat_session(req: Optional[CreateSessionRequest] = None) -> Dict[str, Any]:
+    raw_title = req.title if req and req.title else "New conversation"
+    title = raw_title.strip() or "New conversation"
+    return create_chat_session(title=title)
+
+
+@app.get("/api/chat/sessions/{session_id}")
+def api_get_chat_session(session_id: str) -> Dict[str, Any]:
+    session = get_chat_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Chat session '{session_id}' not found.")
+    return session
+
+
+@app.delete("/api/chat/sessions/{session_id}")
+def api_delete_chat_session(session_id: str) -> Dict[str, Any]:
+    deleted = delete_chat_session(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Chat session '{session_id}' not found.")
+    return {"status": "deleted", "session_id": session_id}
+
+
+@app.post("/api/chat/sessions/{session_id}/messages")
+def api_send_chat_message(
+    session_id: str,
+    req: ChatTurnRequest,
+    background_tasks: BackgroundTasks,
+) -> Dict[str, Any]:
+    if not get_chat_session(session_id):
+        raise HTTPException(status_code=404, detail=f"Chat session '{session_id}' not found.")
+
+    msg_text = req.message.strip()
+    if not msg_text:
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+
+    task = create_task(msg_text)
+    user_msg = add_chat_message(
+        session_id=session_id,
+        role="user",
+        content=msg_text,
+        task_id=task.id,
+    )
+    background_tasks.add_task(run_chat_turn_worker, session_id, task.id, msg_text)
+    return {
+        "session_id": session_id,
+        "task_id": task.id,
+        "status": "running",
+        "message": "Agent turn started.",
+        "user_message": user_msg,
+    }
+
+
 @app.get("/api/approvals")
 def list_approvals() -> List[Dict[str, Any]]:
     return get_pending_approvals()
@@ -176,11 +265,29 @@ def list_approvals() -> List[Dict[str, Any]]:
 def execute_remediation_worker(task_id: str, approval_id: str):
     """Background worker executing approved remediation and updating task state."""
     try:
-        execute_approved_remediation(task_id, approval_id)
+        result = execute_approved_remediation(task_id, approval_id)
+        session_id = find_chat_session_by_task(task_id=task_id, approval_id=approval_id)
+        if session_id:
+            add_chat_message(
+                session_id=session_id,
+                role="assistant",
+                content=result.get("final_report") or "Approved remediation completed.",
+                task_id=task_id,
+                mode="remediation",
+            )
     except Exception as e:
         # Persist failure status so dashboard polling does not remain stuck on waiting_approval.
         log_event(task_id, "decision", f"Remediation failed: {str(e)}")
         update_task_status(task_id, "failed", f"Remediation error: {str(e)}")
+        session_id = find_chat_session_by_task(task_id=task_id, approval_id=approval_id)
+        if session_id:
+            add_chat_message(
+                session_id=session_id,
+                role="assistant",
+                content=f"Remediation failed: {str(e)}",
+                task_id=task_id,
+                mode="remediation",
+            )
 
 
 @app.post("/api/approvals/{id}/approve")
@@ -217,6 +324,18 @@ def reject_action(id: str) -> Dict[str, Any]:
             res.get("target", "target"),
         )
         update_task_status(task_id, "completed", updated_report)
+
+    session_id = find_chat_session_by_task(task_id=task_id, approval_id=id)
+    if session_id:
+        action_type = res.get("action_type", "action")
+        target = res.get("target", "target")
+        add_chat_message(
+            session_id=session_id,
+            role="assistant",
+            content=f"Proposed action `{action_type}` on `{target}` was rejected. Server state remains unchanged.",
+            task_id=task_id,
+            mode="remediation",
+        )
 
     return {
         "status": "rejected",

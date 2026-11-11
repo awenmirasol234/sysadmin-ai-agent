@@ -30,6 +30,14 @@ class APIClient:
         except Exception as e:
             return {"error": str(e)}
 
+    def _delete(self, path: str, timeout: int = 5) -> Dict[str, Any]:
+        """Performs a DELETE request, normalizing HTTP/connection errors into ``{"error": ...}``."""
+        try:
+            r = requests.delete(f"{self.base_url}{path}", timeout=timeout)
+            return r.json() if r.status_code == 200 else {"error": r.text}
+        except Exception as e:
+            return {"error": str(e)}
+
     def get_health(self) -> Dict[str, Any]:
         try:
             r = requests.get(f"{self.base_url}/api/health", timeout=3)
@@ -56,6 +64,24 @@ class APIClient:
 
     def submit_chat_task(self, message: str) -> Dict[str, Any]:
         return self._post("/api/agent/chat", json={"message": message})
+
+    def list_chat_sessions(self, limit: int = 30) -> List[Dict[str, Any]]:
+        return self._get(f"/api/chat/sessions?limit={limit}", default=[])
+
+    def create_chat_session(self, title: str = "New conversation") -> Dict[str, Any]:
+        return self._post("/api/chat/sessions", json={"title": title})
+
+    def get_chat_session(self, session_id: str) -> Dict[str, Any]:
+        safe_id = quote(session_id, safe="")
+        return self._get(f"/api/chat/sessions/{safe_id}", default={})
+
+    def delete_chat_session(self, session_id: str) -> Dict[str, Any]:
+        safe_id = quote(session_id, safe="")
+        return self._delete(f"/api/chat/sessions/{safe_id}")
+
+    def send_chat_message(self, session_id: str, message: str) -> Dict[str, Any]:
+        safe_id = quote(session_id, safe="")
+        return self._post(f"/api/chat/sessions/{safe_id}/messages", json={"message": message})
 
     def get_task(self, task_id: str) -> Dict[str, Any]:
         return self._get(f"/api/agent/tasks/{task_id}")

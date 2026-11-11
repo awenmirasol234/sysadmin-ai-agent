@@ -374,6 +374,58 @@ def build_sidebar_status(health: Dict[str, Any], pending_count: int) -> str:
     )
 
 
+def build_tool_steps_summary(tool_steps: List[Dict[str, Any]]) -> str:
+    """Builds an escaped HTML summary list of agent tool invocations for a chat turn."""
+    if not tool_steps:
+        return ""
+
+    cards: List[str] = []
+    for step in tool_steps:
+        name = _esc(step.get("tool") or "tool")
+        status_raw = str(step.get("status") or "ok").lower()
+        pill = build_status_pill(
+            "Error" if status_raw == "error" else "Complete",
+            "critical" if status_raw == "error" else "healthy",
+        )
+        args_val = step.get("args")
+        args_text = ""
+        if isinstance(args_val, dict) and args_val:
+            args_text = ", ".join(f"{k}={v}" for k, v in args_val.items())
+        elif args_val not in (None, {}, ""):
+            args_text = str(args_val)
+
+        args_html = f'<div class="sa-tool-args">Arguments: {_esc(args_text)}</div>' if args_text else ""
+        preview = str(step.get("result_preview") or "").strip()
+        preview_html = f'<div class="sa-tool-preview">{_esc(preview)}</div>' if preview else ""
+
+        cards.append(
+            '<div class="sa-tool-step">'
+            f'<div class="sa-tool-head"><span class="sa-tool-name">{name}</span>{pill}</div>'
+            f"{args_html}"
+            f"{preview_html}"
+            "</div>"
+        )
+
+    return f'<div class="sa-tool-list">{"".join(cards)}</div>'
+
+
+def build_chat_mode_notice(mode: Optional[str]) -> str:
+    """Builds a subtle contextual notice when a chat turn used fallback or failed."""
+    if mode == "fallback_rule":
+        return (
+            '<div class="sa-chat-notice sa-chat-notice-warning">'
+            "Rule-based fallback mode active. Configure a live provider API key or endpoint in Settings for full autonomous multi-step reasoning."
+            "</div>"
+        )
+    if mode == "error":
+        return (
+            '<div class="sa-chat-notice sa-chat-notice-critical">'
+            "Agent turn encountered an execution error."
+            "</div>"
+        )
+    return ""
+
+
 def render_html(markup: str) -> None:
     """Renders pre-escaped HTML markup using Streamlit's HTML component."""
     st.html(markup)

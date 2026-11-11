@@ -1,6 +1,7 @@
 """SQLite database engine, SQLAlchemy models, and audit persistence repository."""
 
 from datetime import datetime, timezone
+import json
 from typing import Any, Callable, Dict, List, Optional
 import uuid
 from sqlalchemy import (
@@ -138,6 +139,74 @@ class ActionExecution(Base):
     executed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     approval = relationship("ActionApproval", back_populates="executions")
+
+
+class ChatSession(Base):
+    __tablename__ = "chat_sessions"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    title = Column(String(160), default="New conversation", nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    messages = relationship(
+        "ChatMessage",
+        back_populates="session",
+        order_by="ChatMessage.id",
+        cascade="all, delete-orphan",
+    )
+
+    def to_dict(self, include_messages: bool = False, approval_map: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
+        data: Dict[str, Any] = {
+            "id": self.id,
+            "title": self.title,
+            "message_count": len(self.messages),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if include_messages:
+            data["messages"] = [m.to_dict(approval_map=approval_map) for m in self.messages]
+        return data
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(36), ForeignKey("chat_sessions.id"), index=True, nullable=False)
+    task_id = Column(String(36), ForeignKey("agent_tasks.id"), index=True, nullable=True)
+    role = Column(String(16), nullable=False)  # user, assistant
+    content = Column(Text, nullable=False)
+    tool_steps_json = Column(Text, nullable=True)
+    approval_id = Column(String(36), nullable=True)
+    mode = Column(String(24), nullable=True)  # llm_react, fallback_rule, remediation
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    session = relationship("ChatSession", back_populates="messages")
+
+    def to_dict(self, approval_map: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
+        tool_steps: List[Dict[str, Any]] = []
+        if self.tool_steps_json:
+            try:
+                parsed = json.loads(self.tool_steps_json)
+                if isinstance(parsed, list):
+                    tool_steps = parsed
+            except json.JSONDecodeError:
+                tool_steps = []
+        data: Dict[str, Any] = {
+            "id": self.id,
+            "session_id": self.session_id,
+            "task_id": self.task_id,
+            "role": self.role,
+            "content": self.content,
+            "tool_steps": tool_steps,
+            "approval_id": self.approval_id,
+            "mode": self.mode,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+        if self.approval_id and approval_map and self.approval_id in approval_map:
+            data["approval"] = approval_map[self.approval_id]
+        return data
 
 
 # FastAPI runs sync endpoints and BackgroundTasks across threads, which SQLite blocks unless disabled.
@@ -431,3 +500,158 @@ def get_task_history(limit: int = 20) -> List[Dict[str, Any]]:
             .all()
         )
         return [t.to_dict() for t in tasks]
+
+
+def create_chat_session(
+    title: str = "New conversation",
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Creates and persists a conversational chat session."""
+    clean_title = (title or "New conversation").strip()[:160] or "New conversation"
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        session = ChatSession(
+            id=session_id or str(uuid.uuid4()),
+            title=clean_title,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        return session.to_dict(include_messages=True)
+
+
+def list_chat_sessions(limit: int = 30) -> List[Dict[str, Any]]:
+    """Returns recent chat sessions ordered by most recently updated."""
+    with SessionLocal() as db:
+        sessions = (
+            db.query(ChatSession)
+            .options(joinedload(ChatSession.messages))
+            .order_by(desc(ChatSession.updated_at))
+            .limit(limit)
+            .all()
+        )
+        return [s.to_dict(include_messages=False) for s in sessions]
+
+
+def get_chat_session(session_id: str) -> Optional[Dict[str, Any]]:
+    """Fetches a chat session with ordered messages and live approval statuses."""
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        session = (
+            db.query(ChatSession)
+            .options(joinedload(ChatSession.messages))
+            .filter(ChatSession.id == session_id)
+            .first()
+        )
+        if not session:
+            return None
+
+        approval_ids = {m.approval_id for m in session.messages if m.approval_id}
+        approval_map: Dict[str, Dict[str, Any]] = {}
+        if approval_ids:
+            approvals = (
+                db.query(ActionApproval)
+                .filter(ActionApproval.id.in_(approval_ids))
+                .all()
+            )
+            dirty = False
+            for appr in approvals:
+                if appr.status == "pending" and _is_expired(appr.expires_at, now):
+                    appr.status = "expired"
+                    dirty = True
+                approval_map[appr.id] = appr.to_dict()
+            if dirty:
+                db.commit()
+
+        return session.to_dict(include_messages=True, approval_map=approval_map)
+
+
+def delete_chat_session(session_id: str) -> bool:
+    """Deletes a chat session and its messages; returns False if not found."""
+    with SessionLocal() as db:
+        session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+        if not session:
+            return False
+        db.delete(session)
+        db.commit()
+        return True
+
+
+def add_chat_message(
+    session_id: str,
+    role: str,
+    content: str,
+    task_id: Optional[str] = None,
+    tool_steps: Optional[List[Dict[str, Any]]] = None,
+    approval_id: Optional[str] = None,
+    mode: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Appends a user or assistant message to a chat session and refreshes session title/timestamp."""
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+        if not session:
+            return None
+
+        if role == "user" and session.title == "New conversation":
+            normalized = " ".join(content.strip().split())
+            if normalized:
+                session.title = f"{normalized[:77]}..." if len(normalized) > 80 else normalized
+
+        session.updated_at = now
+        msg = ChatMessage(
+            session_id=session_id,
+            task_id=task_id,
+            role=role,
+            content=content,
+            tool_steps_json=json.dumps(tool_steps) if tool_steps else None,
+            approval_id=approval_id,
+            mode=mode,
+            created_at=now,
+        )
+        db.add(msg)
+        db.commit()
+        db.refresh(msg)
+        return msg.to_dict()
+
+
+def get_chat_history_messages(session_id: str, limit: int = 16) -> List[Dict[str, Any]]:
+    """Returns the latest messages in chronological order for LLM conversation context."""
+    with SessionLocal() as db:
+        items = (
+            db.query(ChatMessage)
+            .filter(ChatMessage.session_id == session_id)
+            .order_by(desc(ChatMessage.id))
+            .limit(limit)
+            .all()
+        )
+        return [m.to_dict() for m in reversed(items)]
+
+
+def find_chat_session_by_task(
+    task_id: Optional[str] = None,
+    approval_id: Optional[str] = None,
+) -> Optional[str]:
+    """Resolves the originating chat session ID for a task or approval token, if any."""
+    with SessionLocal() as db:
+        if task_id:
+            msg = (
+                db.query(ChatMessage)
+                .filter(ChatMessage.task_id == task_id)
+                .order_by(desc(ChatMessage.id))
+                .first()
+            )
+            if msg:
+                return msg.session_id
+        if approval_id:
+            msg = (
+                db.query(ChatMessage)
+                .filter(ChatMessage.approval_id == approval_id)
+                .order_by(desc(ChatMessage.id))
+                .first()
+            )
+            if msg:
+                return msg.session_id
+        return None

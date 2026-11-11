@@ -11,8 +11,10 @@ from backend.main import reject_action
 from dashboard.api_client import APIClient, api as dashboard_api
 from dashboard.components import (
     build_approval_dossier,
+    build_chat_mode_notice,
     build_container_inspector_summary,
     build_host_header,
+    build_tool_steps_summary,
 )
 from dashboard.theme import format_status_label, threshold_tone
 
@@ -128,6 +130,13 @@ def test_dashboard_components_escape_html_and_format_status():
     dossier_html = build_approval_dossier({"id": "a1", "action_type": "restart_container", "target": "api", "reason": xss})
     assert "<script>" not in dossier_html
 
+    tools_html = build_tool_steps_summary([{"tool": "inspect_container", "args": {"container_name": xss}, "result_preview": xss, "status": "ok"}])
+    assert "<script>" not in tools_html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in tools_html
+
+    assert "fallback mode" in build_chat_mode_notice("fallback_rule").lower()
+    assert build_chat_mode_notice("llm_react") == ""
+
 
 def test_dashboard_app_renders_with_mocked_api(monkeypatch):
     monkeypatch.setattr(dashboard_api, "get_health", lambda: {"status": "healthy", "provider": "openai", "model": "gpt-4o-mini"})
@@ -146,15 +155,42 @@ def test_dashboard_app_renders_with_mocked_api(monkeypatch):
     monkeypatch.setattr(dashboard_api, "get_pending_approvals", lambda: [])
     monkeypatch.setattr(dashboard_api, "get_history", lambda limit=30: [])
 
+    created_sessions = []
+    sent_messages = []
+    monkeypatch.setattr(dashboard_api, "list_chat_sessions", lambda limit=30: list(created_sessions))
+
+    def fake_create_session(title="New conversation"):
+        s = {"id": "sess-1", "title": title, "message_count": 0, "messages": []}
+        created_sessions.append(s)
+        return s
+
+    def fake_send_message(session_id, message):
+        sent_messages.append((session_id, message))
+        return {"session_id": session_id, "task_id": "task-starter-1", "status": "running"}
+
+    monkeypatch.setattr(dashboard_api, "create_chat_session", fake_create_session)
+    monkeypatch.setattr(dashboard_api, "get_chat_session", lambda sid: {"id": sid, "title": "New conversation", "messages": []})
+    monkeypatch.setattr(dashboard_api, "send_chat_message", fake_send_message)
+    monkeypatch.setattr(dashboard_api, "get_task", lambda tid: {"id": tid, "status": "completed", "started_at": "2026-11-11T00:00:00Z"})
+    monkeypatch.setattr(dashboard_api, "get_task_events", lambda tid: [])
+
     app_path = Path(__file__).resolve().parent.parent / "dashboard" / "app.py"
     at = AppTest.from_file(app_path).run(timeout=15)
     assert not at.exception
     assert len(at.tabs) == 6
 
-    # Clicking an Assistant starter prompt should prefill the prompt input without widget state exceptions.
+    # Clicking an Assistant starter prompt creates a session and sends the conversational turn.
     at.button(key="starter_prompt_0").click().run(timeout=15)
     assert not at.exception
-    assert "health check" in at.session_state["assistant_prompt_input"].lower()
+    assert at.session_state["active_chat_session_id"] == "sess-1"
+    assert len(sent_messages) == 1
+    assert "health check" in sent_messages[0][1].lower()
+
+    # Submitting via inline st.chat_input appends another turn to the same session.
+    at.chat_input[0].set_value("Check worker logs").run(timeout=15)
+    assert not at.exception
+    assert len(sent_messages) == 2
+    assert sent_messages[1] == ("sess-1", "Check worker logs")
 
 
 def test_dashboard_app_renders_populated_incidents_approvals_and_history(monkeypatch):
@@ -186,6 +222,38 @@ def test_dashboard_app_renders_populated_incidents_approvals_and_history(monkeyp
     monkeypatch.setattr(dashboard_api, "get_task", lambda tid: {"id": tid, "status": "waiting_approval", "started_at": "2026-11-11T05:00:00Z", "final_report": "# Investigation Report\nAwaiting approval."})
     monkeypatch.setattr(dashboard_api, "get_task_events", lambda tid: [{"event_type": "tool_call", "created_at": "2026-11-11T05:00:01Z", "description": "Listed containers"}])
 
+    approved_calls = []
+    monkeypatch.setattr(dashboard_api, "approve_action", lambda aid: approved_calls.append(aid) or {"status": "approved", "message": "Executed"})
+    monkeypatch.setattr(dashboard_api, "list_chat_sessions", lambda limit=30: [{"id": "sess-99", "title": "Inspect containers", "message_count": 2}])
+    monkeypatch.setattr(dashboard_api, "get_chat_session", lambda sid: {
+        "id": sid,
+        "title": "Inspect containers",
+        "messages": [
+            {"id": "m1", "role": "user", "content": "Inspect containers", "task_id": "task-1", "tool_steps": []},
+            {
+                "id": "m2",
+                "role": "assistant",
+                "content": "Found exited container `cache`. Requesting restart.",
+                "task_id": "task-1",
+                "mode": "llm_react",
+                "tool_steps": [
+                    {"tool": "list_containers", "args": {"include_stopped": True}, "result_preview": "1 exited container", "status": "ok"}
+                ],
+                "approval_id": "appr-123",
+                "approval": {
+                    "id": "appr-123",
+                    "task_id": "task-1",
+                    "status": "pending",
+                    "action_type": "restart_container",
+                    "target": "cache",
+                    "reason": "Container exited with 137",
+                    "created_at": "2026-11-11T05:01:00Z",
+                    "expires_at": "2026-11-11T05:06:00Z",
+                },
+            },
+        ],
+    })
+
     app_path = Path(__file__).resolve().parent.parent / "dashboard" / "app.py"
     at = AppTest.from_file(app_path)
     at.session_state["active_task_id"] = "task-1"
@@ -193,3 +261,10 @@ def test_dashboard_app_renders_populated_incidents_approvals_and_history(monkeyp
     assert not at.exception
     assert any(b.key == "appr_appr-123" for b in at.button)
     assert any(b.key == "rej_appr-123" for b in at.button)
+    assert any(b.key == "chat_appr_appr-123" for b in at.button)
+    assert any(b.key == "chat_rej_appr-123" for b in at.button)
+
+    # Inline authorization button inside Assistant chat triggers approval endpoint cleanly.
+    at.button(key="chat_appr_appr-123").click().run(timeout=15)
+    assert not at.exception
+    assert approved_calls == ["appr-123"]
