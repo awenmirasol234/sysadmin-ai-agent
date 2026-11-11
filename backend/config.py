@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     )
 
     # LLM Provider Configuration
-    # Supported: "openai", "anthropic", "google", "ollama", "openai-compatible"
+    # Supported: "openai", "anthropic", "google", "openai-compatible"
     LLM_PROVIDER: str = "openai"
     LLM_MODEL: str = "gpt-4o-mini"
     LLM_API_KEY: Optional[str] = None
@@ -43,7 +43,6 @@ class Settings(BaseSettings):
     SYSTEM_PROTECTED_CONTAINERS: List[str] = [
         "sysadmin-backend",
         "sysadmin-dashboard",
-        "sysadmin-ollama",
     ]
 
     # Action Approval Security

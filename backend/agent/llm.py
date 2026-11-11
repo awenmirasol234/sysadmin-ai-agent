@@ -19,7 +19,7 @@ def get_chat_model(
         provider: Provider identifier (defaults to ``settings.LLM_PROVIDER``).
         model: Model name (defaults to ``settings.LLM_MODEL``).
         api_key: Explicit key override; falls back to provider-scoped settings.
-        base_url: Custom endpoint URL for Ollama or OpenAI-compatible servers.
+        base_url: Custom endpoint URL for OpenAI-compatible servers.
         temperature: Sampling temperature override.
 
     Returns:
@@ -60,19 +60,10 @@ def get_chat_model(
             temperature=resolved_temp,
         )
 
-    elif resolved_provider == "ollama":
-        from langchain_ollama import ChatOllama
-        url = resolved_base_url or "http://localhost:11434"
-        return ChatOllama(
-            model=resolved_model,
-            base_url=url,
-            temperature=resolved_temp,
-        )
-
     else:
         raise ValueError(
             f"Unsupported LLM provider: '{resolved_provider}'. "
-            f"Supported providers: openai, anthropic, google, ollama, openai-compatible"
+            f"Supported providers: openai, anthropic, google, openai-compatible"
         )
 
 

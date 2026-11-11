@@ -36,21 +36,8 @@ services:
     networks:
       - sysadmin-net
 
-  # Optional 100% offline local LLM profile
-  ollama:
-    image: ollama/ollama:latest
-    container_name: sysadmin-ollama
-    profiles: ["local-llm"]
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_models:/root/.ollama
-    networks:
-      - sysadmin-net
-
 volumes:
   sysadmin_data:
-  ollama_models:
 
 networks:
   sysadmin-net:

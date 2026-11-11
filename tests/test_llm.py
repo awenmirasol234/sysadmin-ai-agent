@@ -22,12 +22,6 @@ def test_instantiate_google():
     assert model.model == "gemini-2.5-flash"
 
 
-def test_instantiate_ollama():
-    model = get_chat_model(provider="ollama", model="llama3.1:8b", base_url="http://localhost:11434")
-    assert model.__class__.__name__ == "ChatOllama"
-    assert model.model == "llama3.1:8b"
-
-
 def test_instantiate_openai_compatible():
     model = get_chat_model(
         provider="openai-compatible",
@@ -42,6 +36,10 @@ def test_unsupported_provider():
     with pytest.raises(ValueError) as exc_info:
         get_chat_model(provider="unknown-provider-xyz")
     assert "Unsupported LLM provider" in str(exc_info.value)
+
+    with pytest.raises(ValueError) as ollama_exc:
+        get_chat_model(provider="ollama")
+    assert "Unsupported LLM provider" in str(ollama_exc.value)
 
 
 def test_provider_specific_api_key_isolation():

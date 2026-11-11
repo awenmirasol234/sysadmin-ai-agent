@@ -239,8 +239,14 @@ with tabs[5]:
     p_col2.write(f"**Configured Model:** `{health.get('model', 'N/A')}`")
 
     st.markdown("#### Test Model Connectivity")
-    test_provider = st.selectbox("Provider to test:", ["openai", "anthropic", "google", "ollama", "openai-compatible"])
-    test_model = st.text_input("Model identifier:", value="gpt-4o-mini" if test_provider == "openai" else "llama3.1")
+    default_probe_models = {
+        "openai": "gpt-4o-mini",
+        "anthropic": "claude-3-5-haiku-20241022",
+        "google": "gemini-2.5-flash",
+        "openai-compatible": "gpt-4o-mini",
+    }
+    test_provider = st.selectbox("Provider to test:", ["openai", "anthropic", "google", "openai-compatible"])
+    test_model = st.text_input("Model identifier:", value=default_probe_models.get(test_provider, "gpt-4o-mini"))
     if st.button("Probe Model Connection"):
         with st.spinner("Probing model connection..."):
             probe_res = api.probe_model(test_provider, test_model)
