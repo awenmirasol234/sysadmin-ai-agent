@@ -2,6 +2,7 @@
 
 import os
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 import requests
 
 BACKEND_API_URL = os.environ.get("BACKEND_API_URL", "http://localhost:8000")
@@ -45,8 +46,13 @@ class APIClient:
     def get_containers(self) -> List[Dict[str, Any]]:
         return self._get("/api/docker/containers", default=[])
 
+    def get_container_details(self, name: str) -> Dict[str, Any]:
+        safe_name = quote(name, safe="")
+        return self._get(f"/api/docker/containers/{safe_name}")
+
     def get_container_logs(self, name: str, tail: int = 100) -> Dict[str, Any]:
-        return self._get(f"/api/docker/containers/{name}/logs?tail={tail}", default={"logs": []})
+        safe_name = quote(name, safe="")
+        return self._get(f"/api/docker/containers/{safe_name}/logs?tail={tail}", default={"logs": []})
 
     def submit_chat_task(self, message: str) -> Dict[str, Any]:
         return self._post("/api/agent/chat", json={"message": message})
@@ -72,8 +78,19 @@ class APIClient:
     def get_history(self, limit: int = 20) -> List[Dict[str, Any]]:
         return self._get(f"/api/history?limit={limit}", default=[])
 
-    def probe_model(self, provider: str, model: str) -> Dict[str, Any]:
-        return self._post("/api/model/probe", json={"provider": provider, "model": model}, timeout=10)
+    def probe_model(
+        self,
+        provider: str,
+        model: str,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"provider": provider, "model": model}
+        if api_key:
+            payload["api_key"] = api_key
+        if base_url:
+            payload["base_url"] = base_url
+        return self._post("/api/model/probe", json=payload, timeout=10)
 
 
 api = APIClient()

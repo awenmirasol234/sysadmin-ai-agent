@@ -1,11 +1,20 @@
 """Unit tests for dashboard API client contracts and API rejection handling."""
 
+from pathlib import Path
 from unittest.mock import MagicMock
+
+from streamlit.testing.v1 import AppTest
 
 from backend.agent.graph import run_investigation
 from backend.db import get_task
 from backend.main import reject_action
-from dashboard.api_client import APIClient
+from dashboard.api_client import APIClient, api as dashboard_api
+from dashboard.components import (
+    build_approval_dossier,
+    build_container_inspector_summary,
+    build_host_header,
+)
+from dashboard.theme import format_status_label, threshold_tone
 
 
 def test_api_client_accepts_limit_params(monkeypatch):
@@ -57,3 +66,130 @@ def test_reject_action_updates_task_and_report(monkeypatch):
     assert task["status"] == "completed"
     assert "Action Rejected by User" in task["final_report"]
     assert "Container Stopped: cache" in task["final_report"]
+
+
+def test_api_client_container_details_and_probe_payload(monkeypatch):
+    get_urls = []
+    post_calls = []
+
+    def fake_get(url, timeout=5):
+        get_urls.append(url)
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {"name": "api", "status": "running"}
+        return resp
+
+    def fake_post(url, json=None, timeout=5):
+        post_calls.append((url, json, timeout))
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {"success": True, "response": "PONG"}
+        return resp
+
+    monkeypatch.setattr("dashboard.api_client.requests.get", fake_get)
+    monkeypatch.setattr("dashboard.api_client.requests.post", fake_post)
+
+    client = APIClient(base_url="http://localhost:8000")
+    details = client.get_container_details("my/container")
+    assert details["status"] == "running"
+    assert get_urls == ["http://localhost:8000/api/docker/containers/my%2Fcontainer"]
+
+    client.probe_model("openai", "gpt-4o-mini")
+    client.probe_model("openai-compatible", "9r-model", api_key="secret", base_url="http://localhost:20128/v1")
+    assert post_calls == [
+        ("http://localhost:8000/api/model/probe", {"provider": "openai", "model": "gpt-4o-mini"}, 10),
+        (
+            "http://localhost:8000/api/model/probe",
+            {
+                "provider": "openai-compatible",
+                "model": "9r-model",
+                "api_key": "secret",
+                "base_url": "http://localhost:20128/v1",
+            },
+            10,
+        ),
+    ]
+
+
+def test_dashboard_components_escape_html_and_format_status():
+    assert format_status_label("waiting_approval") == "Waiting approval"
+    assert format_status_label("tool_call") == "Tool call"
+    assert threshold_tone(92.0, 70.0, 90.0) == "critical"
+    assert threshold_tone(75.0, 70.0, 90.0) == "warning"
+
+    xss = "<script>alert(1)</script>"
+    header_html = build_host_header({"hostname": xss, "os": "Linux"}, {"status": "healthy", "provider": "openai", "model": "gpt-4o-mini"}, "2h 1m")
+    assert "<script>" not in header_html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in header_html
+
+    inspector_html = build_container_inspector_summary({"name": xss, "status": "exited", "image": "redis", "ports": []})
+    assert "<script>" not in inspector_html
+
+    dossier_html = build_approval_dossier({"id": "a1", "action_type": "restart_container", "target": "api", "reason": xss})
+    assert "<script>" not in dossier_html
+
+
+def test_dashboard_app_renders_with_mocked_api(monkeypatch):
+    monkeypatch.setattr(dashboard_api, "get_health", lambda: {"status": "healthy", "provider": "openai", "model": "gpt-4o-mini"})
+    monkeypatch.setattr(dashboard_api, "get_system_info", lambda: {"hostname": "prod-node-1", "os": "Linux", "os_release": "6.8", "architecture": "x86_64", "cpu_count_logical": 4, "cpu_count_physical": 2})
+    monkeypatch.setattr(dashboard_api, "get_system_metrics", lambda: {
+        "metrics": {"cpu_usage_percent": 32.5, "cpu_per_core": [20.0, 45.0, 30.0, 35.0], "memory_usage_percent": 54.0, "memory_used_gb": 8.6, "memory_total_gb": 16.0, "swap_usage_percent": 1.0, "swap_used_gb": 0.1, "swap_total_gb": 4.0},
+        "disk": {"path": "/", "disk_usage_percent": 41.2, "disk_used_gb": 41.2, "disk_total_gb": 100.0},
+        "uptime": {"uptime_human": "4d 3h 12m"},
+        "load_average": {"load_1m": 0.42, "load_5m": 0.38, "load_15m": 0.31},
+        "network": {"bytes_sent_mb": 120.5, "bytes_recv_mb": 240.8, "packets_sent": 1000, "packets_recv": 1500, "interfaces": ["eth0", "lo"]},
+    })
+    monkeypatch.setattr(dashboard_api, "get_incidents", lambda limit=10: [])
+    monkeypatch.setattr(dashboard_api, "get_containers", lambda: [{"id": "abc123", "name": "worker", "status": "running", "image": "app:latest", "created": "2026-11-11T00:00:00Z"}])
+    monkeypatch.setattr(dashboard_api, "get_container_details", lambda name: {"id": "abc123", "name": name, "image": "app:latest", "status": "running", "health": "healthy", "exit_code": 0, "restart_count": 0, "ports": ["8000/tcp"], "started_at": "2026-11-11T00:00:00Z"})
+    monkeypatch.setattr(dashboard_api, "get_container_logs", lambda name, tail=50: {"logs": ["INFO Server listening"]})
+    monkeypatch.setattr(dashboard_api, "get_pending_approvals", lambda: [])
+    monkeypatch.setattr(dashboard_api, "get_history", lambda limit=30: [])
+
+    app_path = Path(__file__).resolve().parent.parent / "dashboard" / "app.py"
+    at = AppTest.from_file(app_path).run(timeout=15)
+    assert not at.exception
+    assert len(at.tabs) == 6
+
+    # Clicking an Assistant starter prompt should prefill the prompt input without widget state exceptions.
+    at.button(key="starter_prompt_0").click().run(timeout=15)
+    assert not at.exception
+    assert "health check" in at.session_state["assistant_prompt_input"].lower()
+
+
+def test_dashboard_app_renders_populated_incidents_approvals_and_history(monkeypatch):
+    monkeypatch.setattr(dashboard_api, "get_health", lambda: {"status": "healthy", "provider": "openai-compatible", "model": "deepseek-chat"})
+    monkeypatch.setattr(dashboard_api, "get_system_info", lambda: {"hostname": "prod-node-2", "os": "Linux", "os_release": "6.8", "architecture": "x86_64", "cpu_count_logical": 2, "cpu_count_physical": 2})
+    monkeypatch.setattr(dashboard_api, "get_system_metrics", lambda: {
+        "metrics": {"cpu_usage_percent": 91.5, "cpu_per_core": [92.0, 91.0], "memory_usage_percent": 82.0, "memory_used_gb": 13.1, "memory_total_gb": 16.0, "swap_usage_percent": 15.0, "swap_used_gb": 0.6, "swap_total_gb": 4.0},
+        "disk": {"path": "/host/root", "disk_usage_percent": 85.0, "disk_used_gb": 85.0, "disk_total_gb": 100.0},
+        "uptime": {"uptime_human": "12d 1h"},
+        "load_average": {"load_1m": 2.4, "load_5m": 1.9, "load_15m": 1.4},
+        "network": {"bytes_sent_mb": 400.0, "bytes_recv_mb": 820.0, "packets_sent": 5000, "packets_recv": 9000, "interfaces": ["eth0", "docker0"]},
+    })
+    monkeypatch.setattr(dashboard_api, "get_incidents", lambda limit=10: [
+        {"severity": "critical", "component": "system", "title": "High Resource Usage Detected", "status": "open", "created_at": "2026-11-11T05:00:00Z"}
+    ])
+    monkeypatch.setattr(dashboard_api, "get_containers", lambda: [
+        {"id": "def456", "name": "cache", "status": "exited", "image": "redis:7", "created": "2026-11-11T04:00:00Z"}
+    ])
+    monkeypatch.setattr(dashboard_api, "get_container_details", lambda name: {
+        "id": "def456", "name": name, "image": "redis:7", "status": "exited", "health": "none", "exit_code": 137, "restart_count": 2, "ports": [], "started_at": "2026-11-11T04:00:00Z", "error": "OOMKilled"
+    })
+    monkeypatch.setattr(dashboard_api, "get_container_logs", lambda name, tail=50: {"logs": []})
+    monkeypatch.setattr(dashboard_api, "get_pending_approvals", lambda: [
+        {"id": "appr-123", "action_type": "restart_container", "target": "cache", "reason": "Container exited with 137", "created_at": "2026-11-11T05:01:00Z", "expires_at": "2026-11-11T05:06:00Z"}
+    ])
+    monkeypatch.setattr(dashboard_api, "get_history", lambda limit=30: [
+        {"id": "task-1", "user_request": "Inspect containers", "status": "waiting_approval", "started_at": "2026-11-11T05:00:00Z", "final_report": "# Report\nPending approval", "events": [{"event_type": "approval_request", "description": "Created approval"}]}
+    ])
+    monkeypatch.setattr(dashboard_api, "get_task", lambda tid: {"id": tid, "status": "waiting_approval", "started_at": "2026-11-11T05:00:00Z", "final_report": "# Investigation Report\nAwaiting approval."})
+    monkeypatch.setattr(dashboard_api, "get_task_events", lambda tid: [{"event_type": "tool_call", "created_at": "2026-11-11T05:00:01Z", "description": "Listed containers"}])
+
+    app_path = Path(__file__).resolve().parent.parent / "dashboard" / "app.py"
+    at = AppTest.from_file(app_path)
+    at.session_state["active_task_id"] = "task-1"
+    at.run(timeout=15)
+    assert not at.exception
+    assert any(b.key == "appr_appr-123" for b in at.button)
+    assert any(b.key == "rej_appr-123" for b in at.button)
