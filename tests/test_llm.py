@@ -45,6 +45,7 @@ def test_unsupported_provider():
 
 
 def test_provider_specific_api_key_isolation():
+    # Disable .env loading so local developer credentials do not affect key isolation assertions.
     cfg = Settings(
         _env_file=None,
         LLM_PROVIDER="openai",

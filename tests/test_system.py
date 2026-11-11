@@ -58,17 +58,14 @@ def test_get_load_average():
 
 
 def test_evaluate_thresholds():
-    # Healthy scenario
     h = evaluate_thresholds(cpu_percent=20.0, memory_percent=40.0, disk_percent=50.0)
     assert h["status"] == "healthy"
     assert len(h["issues"]) == 0
 
-    # Warning scenario
     w = evaluate_thresholds(cpu_percent=75.0, memory_percent=50.0, disk_percent=50.0)
     assert w["status"] == "warning"
     assert any("CPU warning" in i for i in w["issues"])
 
-    # Critical scenario
     c = evaluate_thresholds(cpu_percent=95.0, memory_percent=50.0, disk_percent=50.0)
     assert c["status"] == "critical"
     assert any("CPU critical" in i for i in c["issues"])

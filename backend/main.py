@@ -39,7 +39,6 @@ from backend.tools.system import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Initialize SQLite database
     init_db()
     yield
 
@@ -51,6 +50,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Wildcard CORS requires credentials disabled; Streamlit calls this API server-side.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -82,7 +82,6 @@ class ModelProbeRequest(BaseModel):
     base_url: Optional[str] = None
 
 
-# Endpoints
 @app.get("/api/health")
 def get_health() -> Dict[str, Any]:
     return {
@@ -133,10 +132,11 @@ def api_container_logs(name: str, tail: int = 100) -> Dict[str, Any]:
 
 
 def run_agent_task_worker(task_id: str, message: str):
-    """Background worker executing the LangGraph investigation."""
+    """Background worker executing the investigation workflow."""
     try:
         run_investigation(task_id, message)
     except Exception as e:
+        # BackgroundTasks errors are invisible to the HTTP caller; persist failure for polling.
         log_event(task_id, "decision", f"Investigation failed with error: {str(e)}")
         update_task_status(task_id, "failed", f"Execution error: {str(e)}")
 
@@ -174,10 +174,11 @@ def list_approvals() -> List[Dict[str, Any]]:
 
 
 def execute_remediation_worker(task_id: str, approval_id: str):
-    """Background worker executing approved remediation and verifying."""
+    """Background worker executing approved remediation and updating task state."""
     try:
         execute_approved_remediation(task_id, approval_id)
     except Exception as e:
+        # Persist failure status so dashboard polling does not remain stuck on waiting_approval.
         log_event(task_id, "decision", f"Remediation failed: {str(e)}")
         update_task_status(task_id, "failed", f"Remediation error: {str(e)}")
 
@@ -205,6 +206,7 @@ def reject_action(id: str) -> Dict[str, Any]:
     if "error" in res:
         raise HTTPException(status_code=400, detail=res["error"])
 
+    # Update the parent task so history reflects the rejection instead of remaining pending.
     task_id = res.get("task_id")
     if task_id:
         existing = get_task(task_id)
@@ -235,6 +237,7 @@ def list_history(limit: int = 20) -> List[Dict[str, Any]]:
 
 @app.post("/api/model/probe")
 def probe_model(req: ModelProbeRequest) -> Dict[str, Any]:
+    # Return structured diagnostics rather than HTTP 500 so the UI displays provider errors inline.
     try:
         model = get_chat_model(
             provider=req.provider,

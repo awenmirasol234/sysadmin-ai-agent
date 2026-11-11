@@ -1,9 +1,13 @@
+"""Application settings and environment configuration for SysAdmin AI Agent."""
+
 from typing import List, Optional, Union
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """Typed environment settings loaded from `.env` and process environment."""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -54,12 +58,13 @@ class Settings(BaseSettings):
     @field_validator("ALLOWED_CONTAINERS", mode="before")
     @classmethod
     def parse_comma_separated_list(cls, value):
+        # Accept comma-separated env strings as well as direct Python list overrides in tests.
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
 
     def get_api_key(self, provider: Optional[str] = None) -> Optional[str]:
-        """Resolves the appropriate API key for the specified or configured provider."""
+        """Resolves the API key for the requested or configured LLM provider."""
         resolved_provider = (provider or self.LLM_PROVIDER).strip().lower()
         provider_keys = {
             "openai": self.OPENAI_API_KEY,
@@ -72,6 +77,8 @@ class Settings(BaseSettings):
         if specific_key:
             return specific_key
 
+        # Restrict generic LLM_API_KEY fallback to the active provider so probing
+        # a different provider never leaks credentials meant for another SDK.
         if self.LLM_API_KEY and resolved_provider == self.LLM_PROVIDER.strip().lower():
             return self.LLM_API_KEY
 

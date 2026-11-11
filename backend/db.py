@@ -53,7 +53,7 @@ class AgentEvent(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     task_id = Column(String(36), ForeignKey("agent_tasks.id"), index=True, nullable=False)
-    event_type = Column(String(32), nullable=False)  # tool_call, observation, decision, approval
+    event_type = Column(String(32), nullable=False)  # tool_call, decision, approval_request
     description = Column(Text, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -74,7 +74,7 @@ class Incident(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     task_id = Column(String(36), ForeignKey("agent_tasks.id"), nullable=True)
     severity = Column(String(16), default="warning")  # info, warning, critical
-    component = Column(String(32), nullable=False)  # docker, system, service
+    component = Column(String(32), nullable=False)  # docker, system
     title = Column(String(255), nullable=False)
     description = Column(Text, nullable=False)
     status = Column(String(16), default="open")  # open, resolved, dismissed
@@ -140,7 +140,7 @@ class ActionExecution(Base):
     approval = relationship("ActionApproval", back_populates="executions")
 
 
-# Engine and Session initialization
+# FastAPI runs sync endpoints and BackgroundTasks across threads, which SQLite blocks unless disabled.
 engine = create_engine(
     settings.DATABASE_URL,
     connect_args={"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {},
@@ -149,12 +149,13 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def init_db():
-    """Creates all database tables."""
+    """Creates all database tables if they do not exist."""
     Base.metadata.create_all(bind=engine)
 
 
 def _is_expired(expires_at: datetime, now: datetime) -> bool:
     """Checks whether an expiration timestamp has passed in UTC."""
+    # SQLite drops tzinfo on DateTime columns; normalize naive DB values back to UTC.
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     return expires_at < now
@@ -162,6 +163,7 @@ def _is_expired(expires_at: datetime, now: datetime) -> bool:
 
 # Repository Helpers
 def create_task(user_request: str) -> AgentTask:
+    """Creates and persists a new running agent task."""
     with SessionLocal() as db:
         task = AgentTask(user_request=user_request, status="running")
         db.add(task)
@@ -171,6 +173,7 @@ def create_task(user_request: str) -> AgentTask:
 
 
 def ensure_task(task_id: str, user_request: str) -> AgentTask:
+    """Creates a task row only if missing, supporting caller-supplied IDs in CLI/tests."""
     with SessionLocal() as db:
         existing = db.query(AgentTask).filter(AgentTask.id == task_id).first()
         if existing:
@@ -183,6 +186,7 @@ def ensure_task(task_id: str, user_request: str) -> AgentTask:
 
 
 def get_task(task_id: str, include_events: bool = False) -> Optional[Dict[str, Any]]:
+    """Fetches a serialized task by ID, or None if not found."""
     with SessionLocal() as db:
         query = db.query(AgentTask)
         if include_events:
@@ -192,6 +196,7 @@ def get_task(task_id: str, include_events: bool = False) -> Optional[Dict[str, A
 
 
 def get_task_events(task_id: str) -> Optional[List[Dict[str, Any]]]:
+    """Fetches ordered audit events for a task, or None if the task does not exist."""
     with SessionLocal() as db:
         task = (
             db.query(AgentTask)
@@ -205,10 +210,12 @@ def get_task_events(task_id: str) -> Optional[List[Dict[str, Any]]]:
 
 
 def update_task_status(task_id: str, status: str, final_report: Optional[str] = None):
+    """Updates task status, optional report text, and completion timestamp."""
     with SessionLocal() as db:
         task = db.query(AgentTask).filter(AgentTask.id == task_id).first()
         if task:
             task.status = status
+            # Explicit None check lets callers preserve or clear empty strings intentionally.
             if final_report is not None:
                 task.final_report = final_report
             if status in ("completed", "failed"):
@@ -252,6 +259,7 @@ def get_all_incidents(limit: int = 50) -> List[Dict[str, Any]]:
 
 
 def get_pending_approvals() -> List[Dict[str, Any]]:
+    """Returns active pending approvals after lazily marking expired items."""
     now = datetime.now(timezone.utc)
     with SessionLocal() as db:
         pending = (
@@ -338,7 +346,17 @@ def prepare_approval_execution(
     validate_fn: Callable[[str, str], None],
     hash_fn: Callable[[str, str], str],
 ) -> Dict[str, Any]:
-    """Validates an approval record before executing an action."""
+    """Validates an approval record before executing an action.
+
+    Args:
+        approval_id: Approval UUID token to authorize.
+        now: Current UTC timestamp for expiration checks.
+        validate_fn: Policy validator raising on disallowed action/target.
+        hash_fn: Fingerprint generator matching stored arguments_hash.
+
+    Returns:
+        Dict with ``action_type`` and ``target`` when valid, or ``error``.
+    """
     with SessionLocal() as db:
         approval = db.query(ActionApproval).filter(ActionApproval.id == approval_id).first()
         if not approval:
@@ -355,6 +373,7 @@ def prepare_approval_execution(
             db.commit()
             return {"error": "Approval token has expired."}
 
+        # Re-validate allowlist and hash at execution time in case policy changed since approval.
         try:
             validate_fn(approval.action_type, approval.target)
         except Exception as exc:
@@ -386,6 +405,7 @@ def complete_approval_execution(
     with SessionLocal() as db:
         approval = db.query(ActionApproval).filter(ActionApproval.id == approval_id).first()
         if approval:
+            # Invalidate the token immediately after the execution attempt to prevent replays.
             approval.status = "executed"
         db.add(
             ActionExecution(

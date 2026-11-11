@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY dashboard/ /app/dashboard/
 
+# Ensure `from dashboard.api_client import api` resolves under `streamlit run`.
 ENV PYTHONPATH=/app
 EXPOSE 8501
 

@@ -43,6 +43,7 @@ def plan_investigation(state: AgentState) -> Dict[str, Any]:
     plan = []
     if any(k in user_request for k in ["container", "docker", "service", "workload", "daemon"]):
         plan.append("list_docker_containers")
+    # Overall server health checks include containers, whereas container-only prompts skip host metrics.
     if any(k in user_request for k in ["health", "server", "cpu", "memory", "ram", "disk", "uptime", "all", "system"]):
         plan.extend(["get_system_metrics", "get_disk_usage", "get_uptime", "list_docker_containers"])
 
@@ -62,6 +63,7 @@ def execute_tools(state: AgentState) -> Dict[str, Any]:
     """Executes read-only system monitoring and Docker inspection tools."""
     task_id = state.get("task_id", "default-task")
     observations = list(state.get("observations", []))
+    # Fallback runs full inspection if execute_tools is invoked without plan_investigation.
     plan = state.get("investigation_plan") or ["get_system_metrics", "list_docker_containers"]
 
     if "get_system_metrics" in plan:
@@ -100,6 +102,7 @@ def execute_tools(state: AgentState) -> Dict[str, Any]:
                 c_name = c["name"]
                 if c["status"] != "running":
                     obs_docker["stopped_containers"].append(c_name)
+                    # Fetch forensic details and sanitized logs only for non-running containers to bound payloads.
                     details = get_container_details(c_name)
                     logs = get_container_logs(c_name, tail=50)
                     obs_docker["container_details"][c_name] = details
@@ -204,7 +207,8 @@ def decide_next_step(state: AgentState) -> Dict[str, Any]:
                     "approval_request",
                     f"Created pending approval '{pending_approval_id}' to restart '{target}'.",
                 )
-                break  # Process one action per investigation cycle
+                # Propose at most one remediation per cycle so each container action is reviewed individually.
+                break
             except Exception as e:
                 log_event(task_id, "decision", f"Skipped proposing action for {target}: {str(e)}")
 
@@ -250,6 +254,7 @@ def generate_report(state: AgentState) -> Dict[str, Any]:
     """Synthesizes observations, findings, and authorization status into a Markdown report."""
     task_id = state.get("task_id", "default-task")
     final_report = format_investigation_report(state)
+    # Keep waiting_approval status intact when human authorization is pending so polling UIs pause and prompt.
     final_status = "waiting_approval" if state.get("approval_status") == "pending" else "completed"
 
     update_task_status(task_id, final_status, final_report)

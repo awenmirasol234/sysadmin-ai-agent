@@ -4,6 +4,7 @@ import time
 import pandas as pd
 import streamlit as st
 
+# Support both package execution (PYTHONPATH=/app) and direct `streamlit run dashboard/app.py`.
 try:
     from dashboard.api_client import api
 except ImportError:
@@ -16,7 +17,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Custom Styling
 st.markdown(
     """
     <style>
@@ -36,7 +36,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Sidebar
 st.sidebar.title("🤖 SysAdmin AI")
 health = api.get_health()
 if health.get("status") == "healthy":
@@ -44,7 +43,6 @@ if health.get("status") == "healthy":
 else:
     st.sidebar.error("Backend Disconnected")
 
-# Pending Approvals Count in Sidebar
 pending_approvals = api.get_pending_approvals()
 if pending_approvals:
     st.sidebar.warning(f"⚠️ {len(pending_approvals)} Action(s) Pending Approval!")
@@ -63,7 +61,6 @@ if st.sidebar.button("Investigate Containers"):
         st.session_state["active_task_id"] = res["task_id"]
         st.rerun()
 
-# Main Tabs
 tabs = st.tabs([
     "📊 Overview",
     "🐳 Containers",
@@ -73,9 +70,7 @@ tabs = st.tabs([
     "⚙️ Settings",
 ])
 
-# ========================================================
-# TAB 1: OVERVIEW
-# ========================================================
+# Tab 1: Overview
 with tabs[0]:
     st.subheader("Server Health & Resource Utilization")
     data = api.get_system_metrics()
@@ -100,7 +95,6 @@ with tabs[0]:
         )
         c4.metric("Server Uptime", uptime.get("uptime_human", "N/A"))
 
-        # Core Info
         st.markdown("#### Host Information")
         col_a, col_b, col_c = st.columns(3)
         col_a.write(f"**Hostname:** `{sys_info.get('hostname', 'unknown')}`")
@@ -116,9 +110,7 @@ with tabs[0]:
     else:
         st.info("No active incidents recorded.")
 
-# ========================================================
-# TAB 2: CONTAINERS
-# ========================================================
+# Tab 2: Containers
 with tabs[1]:
     st.subheader("Docker Container Inventory")
     containers = api.get_containers()
@@ -140,13 +132,10 @@ with tabs[1]:
     else:
         st.warning("No containers found or unable to communicate with Docker daemon.")
 
-# ========================================================
-# TAB 3: AI ASSISTANT
-# ========================================================
+# Tab 3: AI Assistant
 with tabs[2]:
     st.subheader("AI System Administrator")
 
-    # Chat submission
     user_prompt = st.text_input("Enter instruction for the AI Agent:", placeholder="e.g. Investigate stopped containers and recommend solutions")
     if st.button("Submit Instruction") and user_prompt:
         res = api.submit_chat_task(user_prompt)
@@ -160,6 +149,7 @@ with tabs[2]:
         task = api.get_task(active_task_id)
         status = task.get("status", "running")
 
+        # Poll only while running; waiting_approval pauses polling so the user can review Approvals.
         if status == "running":
             st.info(f"Status: **{status.upper()}** (Auto-refreshing...)")
             events = api.get_task_events(active_task_id)
@@ -180,15 +170,12 @@ with tabs[2]:
 
             st.markdown(task.get("final_report") or "No report available.")
 
-            # Show historical events in expander
             with st.expander("Investigation Steps & Event Audit"):
                 events = api.get_task_events(active_task_id)
                 for e in events:
                     st.write(f"- `[{e.get('event_type', '').upper()}]` {e.get('description')}")
 
-# ========================================================
-# TAB 4: APPROVALS
-# ========================================================
+# Tab 4: Approvals
 with tabs[3]:
     st.subheader("Human Authorization Gate")
     st.write("All system and container state modifications require explicit human authorization before execution.")
@@ -228,9 +215,7 @@ with tabs[3]:
                         st.rerun()
                 st.markdown("")
 
-# ========================================================
-# TAB 5: HISTORY
-# ========================================================
+# Tab 5: History
 with tabs[4]:
     st.subheader("Activity & Investigation Audit History")
     history = api.get_history(limit=20)
@@ -244,9 +229,7 @@ with tabs[4]:
     else:
         st.write("No historical tasks recorded yet.")
 
-# ========================================================
-# TAB 6: SETTINGS
-# ========================================================
+# Tab 6: Settings
 with tabs[5]:
     st.subheader("Model Provider & Settings")
     st.write("Inspect active LLM reasoning engine or test connectivity.")

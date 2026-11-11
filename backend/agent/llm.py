@@ -13,7 +13,21 @@ def get_chat_model(
     base_url: Optional[str] = None,
     temperature: Optional[float] = None,
 ) -> BaseChatModel:
-    """Instantiates and returns a ChatModel for any supported provider."""
+    """Instantiates a LangChain ChatModel for the requested or configured provider.
+
+    Args:
+        provider: Provider identifier (defaults to ``settings.LLM_PROVIDER``).
+        model: Model name (defaults to ``settings.LLM_MODEL``).
+        api_key: Explicit key override; falls back to provider-scoped settings.
+        base_url: Custom endpoint URL for Ollama or OpenAI-compatible servers.
+        temperature: Sampling temperature override.
+
+    Returns:
+        Configured ``BaseChatModel`` instance.
+
+    Raises:
+        ValueError: If ``provider`` is not recognized.
+    """
     resolved_provider = (provider or settings.LLM_PROVIDER).strip().lower()
     resolved_model = model or settings.LLM_MODEL
     resolved_temp = temperature if temperature is not None else settings.LLM_TEMPERATURE
@@ -24,6 +38,7 @@ def get_chat_model(
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
             model=resolved_model,
+            # ChatOpenAI requires a non-empty api_key even for unauthenticated local servers (vLLM/LM Studio).
             api_key=resolved_key or "sk-dummy-key-for-local",
             base_url=resolved_base_url,
             temperature=resolved_temp,
@@ -62,7 +77,7 @@ def get_chat_model(
 
 
 def probe_model_connection(chat_model: BaseChatModel) -> Dict[str, Any]:
-    """Tests the model connection and basic invocation."""
+    """Tests model connectivity with a minimal prompt and returns structured diagnostics."""
     try:
         from langchain_core.messages import HumanMessage
         response = chat_model.invoke([HumanMessage(content="Respond with 'PONG' only.")])

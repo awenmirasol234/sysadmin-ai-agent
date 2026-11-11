@@ -25,14 +25,26 @@ class SecurityError(Exception):
 
 
 def validate_target(action_type: str, target: str) -> None:
-    """Validates that the action is supported and target is permitted by policy."""
+    """Validates that the action is supported and the container target is permitted.
+
+    Args:
+        action_type: Operation name (must be in ``SUPPORTED_CONTAINER_ACTIONS``).
+        target: Docker container name (optional leading ``/`` is normalized).
+
+    Raises:
+        SecurityError: If the action is unsupported, the target contains unsafe
+            characters, belongs to protected system containers, or is outside
+            ``ALLOWED_CONTAINERS``.
+    """
     if action_type not in SUPPORTED_CONTAINER_ACTIONS:
         raise SecurityError(f"Unsupported action type: '{action_type}'")
 
+    # Docker API container names sometimes include a leading slash.
     clean_target = target.strip().lstrip("/")
     if not clean_target or any(char in clean_target for char in [";", "&", "|", "`", "$", "\n", "\r", " "]):
         raise SecurityError(f"Target name '{clean_target}' contains illegal characters.")
 
+    # Self-protection overrides wildcard allowlists so the agent cannot disrupt itself.
     if clean_target in settings.SYSTEM_PROTECTED_CONTAINERS:
         raise SecurityError(
             f"Target container '{clean_target}' is a protected SysAdmin system component and cannot be modified."
@@ -46,7 +58,7 @@ def validate_target(action_type: str, target: str) -> None:
 
 
 def compute_action_hash(action_type: str, target: str) -> str:
-    """Computes a SHA-256 fingerprint of the action type and target."""
+    """Computes a SHA-256 fingerprint binding an approval token to normalized arguments."""
     payload = f"{action_type.strip().lower()}:{target.strip().lower()}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -98,7 +110,15 @@ def decide_approval(approval_id: str, decision: str) -> Dict[str, Any]:
 
 
 def execute_approved_action(approval_id: str) -> Dict[str, Any]:
-    """Validates authorization token and executes the approved action, verifying result."""
+    """Authorizes, executes, and verifies a single-use approved container action.
+
+    Args:
+        approval_id: Pending-turned-approved token UUID.
+
+    Returns:
+        Result dictionary with ``success``, ``result``, and ``verification``, or
+        ``{"error": ...}`` if pre-execution authorization checks fail.
+    """
     now = datetime.now(timezone.utc)
     prepared = prepare_approval_execution(
         approval_id=approval_id,
@@ -131,6 +151,7 @@ def execute_approved_action(approval_id: str) -> Dict[str, Any]:
         else:
             raise ValueError(f"Unsupported action: {action_type}")
 
+        # Verify the container reached the intended lifecycle state after the Docker API call.
         expected_status = "exited" if action_type == "stop_container" else "running"
         current_status = get_container_status(target)
         success = current_status == expected_status

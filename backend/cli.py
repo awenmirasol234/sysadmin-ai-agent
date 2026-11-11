@@ -1,4 +1,4 @@
-"""Milestone 1: Interactive Terminal CLI for SysAdmin AI Agent."""
+"""Interactive terminal CLI for running investigations and approving actions locally."""
 
 from backend.agent.graph import execute_approved_remediation, run_investigation
 from backend.agent.report import append_rejection_outcome
@@ -38,7 +38,6 @@ def main():
         report = result.get("final_report", "No report generated.")
         print("\n" + report + "\n")
 
-        # Check if there is an approval waiting
         pending_id = result.get("pending_approval_id")
         if pending_id:
             pending_list = get_pending_approvals()
@@ -58,6 +57,7 @@ def main():
                         remed_result = execute_approved_remediation(task.id, pending_id)
                         print("\n" + remed_result.get("final_report", "") + "\n")
                     else:
+                        # Keep CLI task history consistent with REST API rejections.
                         log_event(task.id, "decision", "User rejected proposed remediation.")
                         updated_report = append_rejection_outcome(
                             report,

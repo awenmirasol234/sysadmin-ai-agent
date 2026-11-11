@@ -9,7 +9,7 @@ import psutil
 
 from backend.config import settings
 
-# If running inside Docker with mounted host filesystems, redirect psutil to host proc
+# Redirect psutil to the mounted host /proc inside Docker so metrics reflect the host, not the container.
 host_proc = settings.HOST_PROC or os.environ.get("HOST_PROC")
 if host_proc and os.path.exists(host_proc):
     psutil.PROCFS_PATH = host_proc
@@ -17,7 +17,7 @@ if host_proc and os.path.exists(host_proc):
 
 def get_system_metrics() -> Dict[str, Any]:
     """Retrieves CPU and Memory utilization."""
-    # Sample CPU over a short interval for accurate measurement
+    # Sample over 0.5s because psutil's initial non-blocking call returns 0.0.
     cpu_percent = psutil.cpu_percent(interval=0.5)
     cpu_per_core = psutil.cpu_percent(interval=None, percpu=True)
     memory = psutil.virtual_memory()
@@ -40,7 +40,7 @@ def get_disk_usage(path: Optional[str] = None) -> Dict[str, Any]:
     """Retrieves disk capacity and available space for the primary partition."""
     target_path = path
     if not target_path:
-        # If in container with host root mounted, use /host/root if it exists
+        # Inside Docker, /host/root exposes the host's primary filesystem instead of container overlayfs.
         if os.path.exists("/host/root"):
             target_path = "/host/root"
         elif platform.system() == "Windows":
@@ -143,6 +143,7 @@ def evaluate_thresholds(
         ("Disk", disk_percent, settings.DISK_WARNING_THRESHOLD, settings.DISK_CRITICAL_THRESHOLD),
     ]
 
+    # Evaluate critical before warning so the highest breached threshold sets overall severity.
     for name, val, warn, crit in checks:
         if val >= crit:
             severity = "critical"

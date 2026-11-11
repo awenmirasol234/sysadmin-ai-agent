@@ -8,10 +8,13 @@ BACKEND_API_URL = os.environ.get("BACKEND_API_URL", "http://localhost:8000")
 
 
 class APIClient:
+    """Thin HTTP client wrapping FastAPI backend endpoints with graceful fallbacks."""
+
     def __init__(self, base_url: str = BACKEND_API_URL):
         self.base_url = base_url.rstrip("/")
 
     def _get(self, path: str, default: Any = None, timeout: int = 5) -> Any:
+        """Performs a GET request, returning ``default`` instead of raising on outages."""
         try:
             r = requests.get(f"{self.base_url}{path}", timeout=timeout)
             return r.json() if r.status_code == 200 else (default if default is not None else {})
@@ -19,6 +22,7 @@ class APIClient:
             return default if default is not None else {}
 
     def _post(self, path: str, json: Optional[Dict] = None, timeout: int = 5) -> Dict[str, Any]:
+        """Performs a POST request, normalizing HTTP/connection errors into ``{"error": ...}``."""
         try:
             r = requests.post(f"{self.base_url}{path}", json=json, timeout=timeout)
             return r.json() if r.status_code == 200 else {"error": r.text}

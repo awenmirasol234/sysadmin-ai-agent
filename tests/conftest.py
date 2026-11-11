@@ -17,6 +17,7 @@ def isolated_db(tmp_path, monkeypatch):
     )
     TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
+    # All backend modules access SQLite through backend.db helpers, isolating tests from root sysadmin_ai.db.
     monkeypatch.setattr(db_module, "engine", test_engine)
     monkeypatch.setattr(db_module, "SessionLocal", TestSessionLocal)
     db_module.init_db()

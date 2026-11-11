@@ -9,6 +9,7 @@ _SECTION_3_PREFIX = "## 3."
 def _format_remediation_section(execution_results: List[Dict[str, Any]]) -> List[str]:
     lines = ["## 3. Remediation & Verification"]
     for ex in execution_results:
+        # Pre-execution validation/token errors return {"error": ...} without action_type/target.
         if "error" in ex and "action_type" not in ex:
             lines.extend([
                 f"- **Execution Error:** {ex['error']}",
@@ -93,10 +94,12 @@ def format_investigation_report(state: Dict[str, Any]) -> str:
 
 
 def _replace_section_3(existing_report: Optional[str], new_section_lines: List[str]) -> str:
+    """Replaces an existing Section 3 block (e.g., pending notice) or appends it."""
     section_text = "\n".join(new_section_lines)
     if not existing_report:
         return section_text
 
+    # Trim from "## 3." onward so the authorization banner is replaced rather than duplicated.
     marker_idx = existing_report.find(_SECTION_3_PREFIX)
     if marker_idx != -1:
         base = existing_report[:marker_idx].rstrip()

@@ -18,7 +18,12 @@ from backend.db import ensure_task, get_task, init_db, log_event, update_task_st
 
 
 def build_agent_graph():
-    """Builds and compiles the investigation StateGraph."""
+    """Builds and compiles the investigation StateGraph.
+
+    Investigation stops after report generation (with status ``waiting_approval`` or
+    ``completed``); approved remediation resumes explicitly via
+    :func:`execute_approved_remediation` rather than keeping in-memory graph checkpoints.
+    """
     workflow = StateGraph(AgentState)
 
     workflow.add_node("understand_request", understand_request)
@@ -71,8 +76,17 @@ def run_investigation(task_id: str, user_request: str) -> Dict[str, Any]:
 
 
 def execute_approved_remediation(task_id: str, approval_id: str) -> Dict[str, Any]:
-    """Executes an authorized remediation and appends outcomes to the investigation report."""
+    """Executes an authorized remediation and appends outcomes to the investigation report.
+
+    Args:
+        task_id: Parent task ID whose existing report should be updated.
+        approval_id: Approved single-use action token ID.
+
+    Returns:
+        Updated state dictionary containing ``execution_results`` and ``final_report``.
+    """
     init_db()
+    # Load existing task so Section 1 (metrics) and Section 2 (findings) are preserved.
     existing_task = get_task(task_id)
 
     resume_state = _create_initial_state(

@@ -7,7 +7,11 @@ from docker.errors import DockerException, NotFound
 
 
 def get_docker_client():
-    """Initializes and returns a Docker client connected to the host daemon."""
+    """Initializes a Docker client with a short timeout to fail fast when offline.
+
+    Raises:
+        RuntimeError: If the host Docker socket is unreachable.
+    """
     try:
         return docker.from_env(timeout=5)
     except DockerException as e:
@@ -17,15 +21,13 @@ def get_docker_client():
 
 
 def sanitize_log_text(text: str) -> str:
-    """Removes sensitive credentials, authorization tokens, and secrets from log lines."""
-    # Redact standard password/secret assignments
+    """Redacts credentials and Bearer tokens before logs are stored or displayed."""
     text = re.sub(
         r"(password|passwd|secret|api[_-]?key|token|auth)=([^\s&;]+)",
         r"\1=[REDACTED]",
         text,
         flags=re.IGNORECASE,
     )
-    # Redact Bearer tokens
     text = re.sub(r"Bearer\s+[A-Za-z0-9\-._~+/]+=*", "Bearer [REDACTED]", text)
     return text
 
@@ -91,6 +93,7 @@ def get_container_logs(container_name: str, tail: int = 100) -> Dict[str, Any]:
     client = get_docker_client()
     try:
         container = client.containers.get(container_name)
+        # Replace invalid UTF-8 bytes so binary output in container logs never fails decoding.
         raw_logs = container.logs(tail=tail, stderr=True, stdout=True).decode("utf-8", errors="replace")
         sanitized = sanitize_log_text(raw_logs)
         lines = [l for l in sanitized.splitlines() if l.strip()]

@@ -16,6 +16,7 @@ from backend.tools.actions import (
 
 @pytest.fixture(autouse=True)
 def restore_allowed_containers():
+    # Tests mutate the global settings singleton directly; reset it between runs.
     orig_allowed = settings.ALLOWED_CONTAINERS
     settings.ALLOWED_CONTAINERS = ["*"]
     yield
